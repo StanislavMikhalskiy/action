@@ -1,0 +1,138 @@
+import com.atlassian.jira.component.ComponentAccessor
+import com.atlassian.sal.api.user.UserManager
+import com.onresolve.scriptrunner.runner.rest.common.CustomEndpointDelegate
+import groovy.json.JsonBuilder
+import groovy.transform.BaseScript
+import groovy.json.JsonOutput
+import javax.ws.rs.core.MultivaluedMap
+import groovyx.net.http.ContentType
+import groovyx.net.http.HTTPBuilder
+import groovyx.net.http.Method
+
+import javax.servlet.http.HttpServletRequest
+import javax.ws.rs.core.Response
+import com.atlassian.jira.issue.fields.rest.json.beans.PriorityJsonBean
+import org.codehaus.jackson.map.ObjectMapper
+import groovy.json.JsonSlurper
+import javax.ws.rs.core.MediaType
+
+import com.atlassian.jira.issue.link.RemoteIssueLinkManager
+import com.atlassian.jira.issue.IssueManager
+import com.atlassian.jira.issue.MutableIssue
+import com.atlassian.jira.issue.link.DefaultIssueLinkManager
+
+import com.atlassian.crowd.embedded.api.User
+import com.atlassian.jira.ComponentManager
+import com.atlassian.jira.issue.link.IssueLinkManager
+import com.atlassian.jira.issue.link.IssueLinkType
+import com.atlassian.jira.issue.link.IssueLinkTypeManager
+import com.atlassian.jira.issue.IssueFactory
+import com.atlassian.jira.project.Project
+import com.atlassian.jira.issue.issuetype.IssueType
+import com.atlassian.jira.event.type.EventDispatchOption
+import com.atlassian.jira.issue.ModifiedValue
+import com.atlassian.jira.issue.util.DefaultIssueChangeHolder
+import com.atlassian.jira.issue.fields.CustomField
+import com.atlassian.jira.issue.ModifiedValue
+import org.apache.log4j.Level
+import org.apache.log4j.Logger
+
+@BaseScript CustomEndpointDelegate delegate
+
+
+
+
+getCurrentUser { queryParams, body, HttpServletRequest request ->
+    def userManager = ComponentAccessor.getOSGiComponentInstanceOfType(UserManager)
+    def userProfile = userManager.getRemoteUser(request)
+    return Response.ok(new JsonBuilder([currentUser: userProfile?.username]).toString()).build()
+}
+
+getTest { queryParams, body, HttpServletRequest request ->
+    
+    //def issueId = queryParams.getFirst("issueId")
+    def test = ["name":"ee"]
+    return Response.ok(new JsonBuilder(test).toString()).build()
+}
+
+createIssueToEstimate(httpMethod: "GET") { MultivaluedMap queryParams, String body ->
+	def result = "start"
+    
+    IssueManager issueManager = ComponentAccessor.getIssueManager()
+	def customFieldManager = ComponentAccessor.getCustomFieldManager()
+	def issueService = ComponentAccessor.issueService
+	def issueInputParameters = issueService.newIssueInputParameters()
+	def issueLinkManager = ComponentAccessor.getIssueLinkManager() // ComponentManager.getInstance().getIssueLinkManager()
+	IssueLinkTypeManager issueLinkTypeManager = (IssueLinkTypeManager) ComponentManager.getComponentInstanceOfType(IssueLinkTypeManager.class)
+	def projectManager = ComponentAccessor.projectManager
+	// получаем текущего пользователя
+	def currentUser = ComponentAccessor.getJiraAuthenticationContext().getLoggedInUser()
+    // получаем пользователя для передачи ему задачи на оценку
+    def assigneeUser = ComponentAccessor.userManager.getUserByName("rassolov")
+    // получаем проект
+    def projectObj = projectManager.getProjectObjByKey("SS")
+    // получаем тип задачи
+    def myIssueType = ComponentAccessor.issueTypeSchemeManager.getIssueTypesForProject(projectObj).find{it.name=="Simple Task"}
+   
+    def epicIssueId = queryParams.getFirst("issueId") as Long
+    //def epicIssueId = 116271
+
+    // ===================================================
+    // создаем в эпике задачу сразу на оценку
+    // получаем информацию по текущей задаче
+    def epicIssue = issueManager.getIssueObject(epicIssueId)
+
+    // создаем новую
+	issueInputParameters.with {
+        projectId = projectManager.getProjectObjByKey("SS").id
+        summary = "${epicIssue.summary}. Оценить эпик"
+        issueTypeId = myIssueType.id
+        reporterId = currentUser.key
+        //assigneeId = assigneeUser.key
+        assigneeId = currentUser.key
+        // priorityId
+        // resolutionId
+        description = "Необходимо декомпозировать и оценить эпик ${epicIssue.key}"
+	}
+    def validationResult = issueService.validateCreate(currentUser, issueInputParameters)
+	assert !validationResult.errorCollection.hasAnyErrors()
+	def issueResult = issueService.create(currentUser, validationResult)
+	def newIssue = issueResult.issue
+    
+    // привязываем новую задачу к эпику
+    //def epicLink = customFieldManager.getCustomFieldObject("customfield_10100")
+    def epicLink = customFieldManager.getCustomFieldObjectsByName("Epic Link")?.first()
+    //newIssue.setCustomFieldValue(epicLink,epicIssue)
+    def changeHolder = new DefaultIssueChangeHolder()
+    epicLink.updateValue(null, newIssue, new ModifiedValue(newIssue.getCustomFieldValue(epicLink), epicIssue),changeHolder)
+    
+    def baseUrl = ComponentAccessor.getApplicationProperties().getString("jira.baseurl"); result +="</br>baseurl = ${baseUrl}"
+	def issueUrl = "${baseUrl}/browse/${newIssue.key}"; result +="</br>issueUrl = ${issueUrl}"
+	def issueHtmlLink = "<a href='${issueUrl}'class='button'>${newIssue.key}</a>"; result +="</br>issueHtmlLink = ${issueHtmlLink}"
+    def issueEpicUrl = "${baseUrl}/browse/${epicIssue.key}"; result +="</br>issueUrl = ${issueEpicUrl}"
+	def issueEpicHtmlLink = "<a href='${issueEpicUrl}'class='button'>Вернуться к эпику ${epicIssue.key}</a>"; result +="</br>issueHtmlLink = ${issueEpicHtmlLink}"
+    
+    def flag = [
+        epicIssueId : epicIssueId,
+        epicIssue: epicIssue.key,
+        newIssue: newIssue.key
+    ]
+    def resultValue =
+        """<section role="dialog" id="sr-dialog" class="aui-layer aui-dialog2 aui-dialog2-medium" aria-hidden="true" data-aui-remove-on-hide="true">
+            <header class="aui-dialog2-header">
+                <h2 class="aui-dialog2-header-main">Задача на оценку создана</h2>
+            </header>
+            <div class="aui-dialog2-content">
+                <p>${issueHtmlLink} ${newIssue.summary}</p>
+            </div>
+            <footer class="aui-dialog2-footer">
+                <div class="aui-dialog2-footer-actions">
+                <p>${issueEpicHtmlLink}</p>
+                </div>
+            </footer>
+        </section>
+        """
+
+    //Response.ok(JsonOutput.toJson(flag)).build()
+    Response.ok().type(MediaType.TEXT_HTML).entity(resultValue.toString()).build()
+}
