@@ -1,41 +1,44 @@
-import com.atlassian.jira.component.ComponentAccessor
-import com.atlassian.sal.api.user.UserManager
-import com.onresolve.scriptrunner.runner.rest.common.CustomEndpointDelegate
-import groovy.json.JsonBuilder
-import groovy.transform.BaseScript
-import groovy.json.JsonOutput
-import javax.ws.rs.core.MultivaluedMap
-import groovyx.net.http.ContentType
-import groovyx.net.http.HTTPBuilder
-import groovyx.net.http.Method
-
-import javax.servlet.http.HttpServletRequest
-import javax.ws.rs.core.Response
-import com.atlassian.jira.issue.fields.rest.json.beans.PriorityJsonBean
-import org.codehaus.jackson.map.ObjectMapper
-import groovy.json.JsonSlurper
-import javax.ws.rs.core.MediaType
-
-import com.atlassian.jira.issue.link.RemoteIssueLinkManager
-import com.atlassian.jira.issue.IssueManager
-import com.atlassian.jira.issue.MutableIssue
-import com.atlassian.jira.issue.link.DefaultIssueLinkManager
-
 import com.atlassian.crowd.embedded.api.User
+import com.atlassian.jira.component.ComponentAccessor
 import com.atlassian.jira.ComponentManager
+import com.atlassian.jira.event.type.EventDispatchOption
+import com.atlassian.jira.issue.CustomFieldManager
+import com.atlassian.jira.issue.customfields.option.Options
+import com.atlassian.jira.issue.fields.CustomField
+import com.atlassian.jira.issue.fields.rest.json.beans.PriorityJsonBean
+import com.atlassian.jira.issue.index.IssueIndexingService
+import com.atlassian.jira.issue.IssueFactory
+import com.atlassian.jira.issue.IssueManager
+import com.atlassian.jira.issue.issuetype.IssueType
+import com.atlassian.jira.issue.link.DefaultIssueLinkManager
 import com.atlassian.jira.issue.link.IssueLinkManager
 import com.atlassian.jira.issue.link.IssueLinkType
 import com.atlassian.jira.issue.link.IssueLinkTypeManager
-import com.atlassian.jira.issue.IssueFactory
-import com.atlassian.jira.project.Project
-import com.atlassian.jira.issue.issuetype.IssueType
-import com.atlassian.jira.event.type.EventDispatchOption
+import com.atlassian.jira.issue.link.RemoteIssueLinkManager
 import com.atlassian.jira.issue.ModifiedValue
+import com.atlassian.jira.issue.MutableIssue
 import com.atlassian.jira.issue.util.DefaultIssueChangeHolder
-import com.atlassian.jira.issue.fields.CustomField
-import com.atlassian.jira.issue.ModifiedValue
+import com.atlassian.jira.issue.util.DefaultIssueChangeHolder
+import com.atlassian.jira.project.Project
+import com.atlassian.jira.project.Project
+import com.atlassian.jira.security.JiraAuthenticationContext
+import com.atlassian.jira.util.JiraUtils
+import com.atlassian.sal.api.user.UserManager
+import com.onresolve.scriptrunner.runner.rest.common.CustomEndpointDelegate
+import groovy.json.JsonBuilder
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import groovy.transform.BaseScript
+import groovyx.net.http.ContentType
+import groovyx.net.http.HTTPBuilder
+import groovyx.net.http.Method
+import javax.servlet.http.HttpServletRequest
+import javax.ws.rs.core.MediaType
+import javax.ws.rs.core.MultivaluedMap
+import javax.ws.rs.core.Response
 import org.apache.log4j.Level
 import org.apache.log4j.Logger
+import org.codehaus.jackson.map.ObjectMapper
 
 @BaseScript CustomEndpointDelegate delegate
 
@@ -53,6 +56,117 @@ getTest { queryParams, body, HttpServletRequest request ->
     //def issueId = queryParams.getFirst("issueId")
     def test = ["name":"ee"]
     return Response.ok(new JsonBuilder(test).toString()).build()
+}
+
+createSubTaskForBigPicture(httpMethod: "GET") { MultivaluedMap queryParams, String body ->
+    IssueManager issueManager = ComponentAccessor.getIssueManager()
+    def issueFactory = ComponentAccessor.getIssueFactory()
+    def userReport=""
+    
+    // получаем параметры URL
+    def parentIssueId = queryParams.getFirst("issueId") as Long
+    def issueSubtaskTypeParam = queryParams.getFirst("issueSubtaskType") as String
+    // получаем текущего пользователя
+	def currentUser = ComponentAccessor.getJiraAuthenticationContext().getLoggedInUser()
+    // получаем родительскую задачу
+    MutableIssue parentIssue = issueManager.getIssueObject(parentIssueId)
+    // формируем маппинг типов подзадач
+    def subTaskTypeMap = [
+    "Backend" : "Backend (Sub-task)",
+    "Design" : "Design (Sub-task)",
+    "Frontend" : "Frontend (Sub-task)",
+    "Layout" : "Layout (Sub-task)"
+	]
+    def issueSubtaskType = subTaskTypeMap.get(issueSubtaskTypeParam)
+    
+    // создаем задачу
+    def newSubtask = issueFactory.getIssue()
+    newSubtask.summary = "${issueSubtaskType}. ${parentIssue.summary}"
+	newSubtask.description = "Учет времени на скилл ${issueSubtaskType}"
+	newSubtask.setProjectId(parentIssue.getProjectId())
+    // получаем тип задачи
+	def newIssueType = ComponentAccessor.issueTypeSchemeManager.getIssueTypesForProject(parentIssue.projectObject).find{it.name==issueSubtaskType}
+    userReport += "</br>Тип задачи ${newIssueType.name}"
+    newSubtask.setIssueTypeId(newIssueType.id)
+    newSubtask.setParentId(parentIssue.getId())
+    newSubtask.setAssigneeId(currentUser.key)
+    newSubtask.setReporterId(currentUser.key)
+    newSubtask = issueManager.createIssueObject(currentUser, newSubtask) 
+    // получаем компоненты родительской задачи и копируем их в дочернюю
+	def components = ComponentAccessor.getProjectComponentManager().findComponentsByIssue(parentIssue);
+	ComponentAccessor.getProjectComponentManager().updateIssueProjectComponents(newSubtask, components)
+    userReport += "</br>Компоненты ${components*.name}"
+    /*
+    MutableIssue issue2 = issue
+    Project project = issue.getProjectObject()
+    def component = ComponentAccessor.getProjectComponentManager().findByComponentName(project.getId(),"Name of the component to set")
+    issue2.setComponent([component])
+    */
+    // задаем для кастомного поля "Добавить в" значение 'портфель "проектов"
+    def indexManager = ComponentAccessor.getComponent(IssueIndexingService)
+    def customFieldManager = ComponentAccessor.getCustomFieldManager()
+    def targetField = customFieldManager.getCustomFieldObjects(newSubtask).find {it.name == "Добавить в"}
+    def cfConfig = targetField.getRelevantConfig(newSubtask)
+    def option = ComponentAccessor.optionsManager.getOptions(cfConfig)?.find { it.toString() == "портфель проектов" }
+    def changeHolder = new DefaultIssueChangeHolder();
+    targetField.updateValue(null, newSubtask, new ModifiedValue(newSubtask.getCustomFieldValue(targetField), option), changeHolder);
+    userReport += "</br>Выставлен признак 'Добавить в' = портфель проектов"
+    
+    // определяем и задаем команду
+    //def validator = parentIssue.components*.name.contains('Справочные системы')
+    def componentsTeamMap = [
+        "Справочные системы" : "SS",
+        "Справочные системы. Документы" : "SSD"
+    ]
+    def teamKey = ""
+    parentIssue.components.each {
+        teamKey = componentsTeamMap.get(it.name)
+    }
+    if (teamKey != "") {
+        def teamField = customFieldManager.getCustomFieldObjects(newSubtask).find {it.name == "Команда"}
+        def cfTeamConfig = teamField.getRelevantConfig(newSubtask)
+        def optionTeam = ComponentAccessor.optionsManager.getOptions(cfTeamConfig)?.find { it.toString() == teamKey }
+        changeHolder = new DefaultIssueChangeHolder();
+        teamField.updateValue(null, newSubtask, new ModifiedValue(newSubtask.getCustomFieldValue(teamField), optionTeam), changeHolder);
+        userReport += "</br>Определена команда ${teamKey}"
+    } else userReport += "</br>Команду не удалось определить"
+    indexManager.reIndex(newSubtask)
+    def subTaskManager = ComponentAccessor.getSubTaskManager()
+	subTaskManager.createSubTaskIssueLink(parentIssue, newSubtask, currentUser)
+    
+    
+    def resultValue =
+        """<section role="dialog" id="sr-dialog" class="aui-layer aui-dialog2 aui-dialog2-medium" aria-hidden="true" data-aui-remove-on-hide="true">
+            <header class="aui-dialog2-header">
+                <h2 class="aui-dialog2-header-main">Подзадача успешно создана ${issueSubtaskType}</h2>
+            </header>
+            <div class="aui-dialog2-content">
+                <p>${getIssueHTMLLongLink(newSubtask,"")}</p>
+                <p>${userReport}</p>
+            </div>
+            <footer class="aui-dialog2-footer">
+                <div class="aui-dialog2-footer-actions">
+                <p></br>${getIssueHTMLShortLink(parentIssue,"Вернуться в родительскую задачу ")}</p>
+                </div>
+            </footer>
+        </section>
+        """
+
+    //Response.ok(JsonOutput.toJson(flag)).build()
+    Response.ok().type(MediaType.TEXT_HTML).entity(resultValue.toString()).build()
+}
+
+def getIssueHTMLShortLink(MutableIssue issue, String linkName){
+    def baseUrl = ComponentAccessor.getApplicationProperties().getString("jira.baseurl")
+	def issueUrl = "${baseUrl}/browse/${issue.key}"
+    def issueHtmlLink = "<a href='${issueUrl}'class='button'>${linkName}${issue.key}</a>"
+    
+    return issueHtmlLink
+}
+
+def getIssueHTMLLongLink(MutableIssue issue, String linkName){
+    def issueHtmlLink = getIssueHTMLShortLink(issue, linkName)
+    return "${issueHtmlLink} ${issue.summary}"
 }
 
 createIssueToEstimate(httpMethod: "GET") { MultivaluedMap queryParams, String body ->
@@ -73,7 +187,7 @@ createIssueToEstimate(httpMethod: "GET") { MultivaluedMap queryParams, String bo
     def projectObj = projectManager.getProjectObjByKey("SS")
     // получаем тип задачи
     def myIssueType = ComponentAccessor.issueTypeSchemeManager.getIssueTypesForProject(projectObj).find{it.name=="Simple Task"}
-   
+	// получаем параметры URL
     def epicIssueId = queryParams.getFirst("issueId") as Long
     //def epicIssueId = 116271
 
@@ -88,8 +202,7 @@ createIssueToEstimate(httpMethod: "GET") { MultivaluedMap queryParams, String bo
         summary = "${epicIssue.summary}. Оценить эпик"
         issueTypeId = myIssueType.id
         reporterId = currentUser.key
-        //assigneeId = assigneeUser.key
-        assigneeId = currentUser.key
+        assigneeId = assigneeUser.key
         // priorityId
         // resolutionId
         description = "Необходимо декомпозировать и оценить эпик ${epicIssue.key}"
@@ -106,11 +219,11 @@ createIssueToEstimate(httpMethod: "GET") { MultivaluedMap queryParams, String bo
     def changeHolder = new DefaultIssueChangeHolder()
     epicLink.updateValue(null, newIssue, new ModifiedValue(newIssue.getCustomFieldValue(epicLink), epicIssue),changeHolder)
     
-    def baseUrl = ComponentAccessor.getApplicationProperties().getString("jira.baseurl"); result +="</br>baseurl = ${baseUrl}"
-	def issueUrl = "${baseUrl}/browse/${newIssue.key}"; result +="</br>issueUrl = ${issueUrl}"
-	def issueHtmlLink = "<a href='${issueUrl}'class='button'>${newIssue.key}</a>"; result +="</br>issueHtmlLink = ${issueHtmlLink}"
-    def issueEpicUrl = "${baseUrl}/browse/${epicIssue.key}"; result +="</br>issueUrl = ${issueEpicUrl}"
-	def issueEpicHtmlLink = "<a href='${issueEpicUrl}'class='button'>Вернуться к эпику ${epicIssue.key}</a>"; result +="</br>issueHtmlLink = ${issueEpicHtmlLink}"
+    def baseUrl = ComponentAccessor.getApplicationProperties().getString("jira.baseurl")
+	def issueUrl = "${baseUrl}/browse/${newIssue.key}"
+	def issueHtmlLink = "<a href='${issueUrl}'class='button'>${newIssue.key}</a>"
+    def issueEpicUrl = "${baseUrl}/browse/${epicIssue.key}"
+	def issueEpicHtmlLink = "<a href='${issueEpicUrl}'class='button'>Вернуться к эпику ${epicIssue.key}</a>"
     
     def flag = [
         epicIssueId : epicIssueId,
