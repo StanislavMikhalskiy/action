@@ -1,0 +1,492 @@
+import com.atlassian.crowd.embedded.api.User
+import com.atlassian.jira.component.ComponentAccessor
+import com.atlassian.jira.ComponentManager
+import com.atlassian.jira.event.type.EventDispatchOption
+import com.atlassian.jira.issue.CustomFieldManager
+import com.atlassian.jira.issue.customfields.option.Options
+import com.atlassian.jira.issue.fields.CustomField
+import com.atlassian.jira.issue.fields.rest.json.beans.PriorityJsonBean
+import com.atlassian.jira.issue.index.IssueIndexingService
+import com.atlassian.jira.issue.IssueFactory
+import com.atlassian.jira.issue.IssueManager
+import com.atlassian.jira.issue.issuetype.IssueType
+import com.atlassian.jira.issue.link.DefaultIssueLinkManager
+import com.atlassian.jira.issue.link.IssueLinkManager
+import com.atlassian.jira.issue.link.IssueLinkType
+import com.atlassian.jira.issue.link.IssueLinkTypeManager
+import com.atlassian.jira.issue.link.RemoteIssueLinkManager
+import com.atlassian.jira.issue.ModifiedValue
+import com.atlassian.jira.issue.MutableIssue
+import com.atlassian.jira.issue.util.DefaultIssueChangeHolder
+import com.atlassian.jira.project.Project
+import com.atlassian.jira.security.JiraAuthenticationContext
+import com.atlassian.jira.util.JiraUtils
+import com.atlassian.sal.api.user.UserManager
+import com.onresolve.scriptrunner.runner.rest.common.CustomEndpointDelegate
+import groovy.json.JsonBuilder
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import groovy.transform.BaseScript
+import groovyx.net.http.ContentType
+import groovyx.net.http.HTTPBuilder
+import groovyx.net.http.Method
+import javax.servlet.http.HttpServletRequest
+import javax.ws.rs.core.MediaType
+import javax.ws.rs.core.MultivaluedMap
+import javax.ws.rs.core.Response
+import org.apache.log4j.Level
+import org.apache.log4j.Logger
+import org.codehaus.jackson.map.ObjectMapper
+import groovy.transform.Field
+import com.atlassian.jira.project.ProjectManager
+import com.atlassian.jira.issue.link.RemoteIssueLinkManager
+
+@BaseScript CustomEndpointDelegate delegate
+
+def createTaskInEpic(currentUser, issueParams){
+    def issueService = ComponentAccessor.issueService
+	def issueInputParameters = issueService.newIssueInputParameters()
+    // создаем новую
+	issueInputParameters.with {
+        projectId = issueParams["project"].id
+        summary = "${issueParams['epic'].summary}. ${issueParams['summary']}"
+        issueTypeId = issueParams["issueType"].id
+        reporterId = currentUser.key
+        assigneeId = currentUser.key
+        priorityId = issueParams["priorityId"]
+        description = "${issueParams["description"]} \n\nОбщее описание требований см. в эпике"
+	}
+    
+    def validationResult = issueService.validateCreate(currentUser, issueInputParameters)
+	assert !validationResult.errorCollection.hasAnyErrors()
+	def issueResult = issueService.create(currentUser, validationResult)
+	def newIssue = issueResult.issue
+    
+     // выставляем связь с эпиком
+    def customFieldManager = ComponentAccessor.getCustomFieldManager()
+    def epicLink = customFieldManager.getCustomFieldObjectsByName("Epic Link")?.first()
+    // newIssue.setCustomFieldValue(epicLink,epicIssue)
+    def changeHolder = new DefaultIssueChangeHolder()
+    epicLink.updateValue(null, newIssue, new ModifiedValue(newIssue.getCustomFieldValue(epicLink), issueParams["epic"]),changeHolder)
+    
+    return newIssue
+}
+
+def createEpic(currentUser, epicParams){
+    def issueService = ComponentAccessor.issueService
+	def issueInputParameters = issueService.newIssueInputParameters()
+    // создаем новую
+	issueInputParameters.with {
+        projectId = epicParams["project"].id
+        summary = "${epicParams['epic'].summary}. ${epicParams['summary']}"
+        issueTypeId = epicParams["issueType"].id
+        reporterId = currentUser.key
+        assigneeId = currentUser.key
+        priorityId = epicParams["priorityId"]
+        description = "{panel:title=Основное описание из эпика SS}\n${epicParams['epic'].description} {panel} \n\n ${epicParams['description']}"
+	}
+    // выставляем название эпика на основании родительского эпика
+    def customFieldManager = ComponentAccessor.getCustomFieldManager()
+    def epicNameFieldObject = customFieldManager.getCustomFieldObjectsByName("Epic Name")?.first()
+    issueInputParameters.addCustomFieldValue("customfield_10102",epicParams['epic'].getCustomFieldValue(epicNameFieldObject))
+    
+    def validationResult = issueService.validateCreate(currentUser, issueInputParameters)
+	assert !validationResult.errorCollection.hasAnyErrors()
+	def issueResult = issueService.create(currentUser, validationResult)
+	def newIssue = issueResult.issue
+    
+    return newIssue
+}
+
+def cloneMapToList(target, source){
+    def sourceClone = source.clone()
+    target.add(sourceClone)
+}
+
+
+createNewSystem(httpMethod: "GET") { MultivaluedMap queryParams, String body ->
+    log.warn("Старт скрипта")
+    // получаем параметры URL
+    def epicIssueId = queryParams.getFirst("issueId") as Long
+    //def epicIssueId = 164369 //163002 https://jira.action-media.ru/browse/SS-3833
+    def resultValue = "issueId = ${epicIssueId}"
+    
+    IssueManager issueManager = ComponentAccessor.getIssueManager()
+	
+	
+	def issueLinkManager = ComponentAccessor.getIssueLinkManager() // ComponentManager.getInstance().getIssueLinkManager()
+	IssueLinkTypeManager issueLinkTypeManager = (IssueLinkTypeManager) ComponentManager.getComponentInstanceOfType(IssueLinkTypeManager.class)
+    
+    
+    // получаем информацию по основному эпику
+    def issueSSEpic = issueManager.getIssueObject(epicIssueId)    
+    
+    // получаем проекты
+    ProjectManager projectManager = ComponentAccessor.getProjectManager()
+    def projectObjSS = projectManager.getProjectObjByKey("SS")
+	def projectObjSSD = projectManager.getProjectObjByKey("SSD")
+	def projectObjSRCH = projectManager.getProjectObjByKey("SRCH")
+	def projectObjOLDINSTR = projectManager.getProjectObjByKey("OLDINSTR")
+	def projectObjOAM = projectManager.getProjectObjByKey("OAM")
+    
+    // получаем приоритет
+	def priorityMajorId = ComponentAccessor.getConstantsManager().getPriorities().find{it.getName().equals("Major")}.getId()
+	def priorityHighId = ComponentAccessor.getConstantsManager().getPriorities().find{it.getName().equals("High")}.getId()
+    
+    // получаем текущего пользователя
+	def currentUser = ComponentAccessor.getJiraAuthenticationContext().getLoggedInUser()
+
+    // получаем тип задачи
+    def issueTypeSimpleTask = ComponentAccessor.issueTypeSchemeManager.getIssueTypesForProject(projectObjSS).find{it.name=="Simple Task"}
+    def issueTypeTask = ComponentAccessor.issueTypeSchemeManager.getIssueTypesForProject(projectObjSS).find{it.name=="Task"}
+	def issueTypeEpic = ComponentAccessor.issueTypeSchemeManager.getIssueTypesForProject(projectObjSS).find{it.name=="Epic"}   
+
+    
+    // массив данных для создания задач
+    def issueParamsList = []
+    // созданные задачи
+    def issueList = []
+    // структура для хранения параметров задачи
+    def issueParams = [
+        	project:		null,
+        	priorityId:		null,
+        	issueTypeId:	null,
+        	epic: 			null,
+            summary:     	"",
+            description:  	""
+    ]
+
+    // создаем задачи в эпике
+    issueParams.project = projectObjSS
+    issueParams.priorityId = priorityMajorId
+    issueParams.epic = issueSSEpic
+    issueParams.issueType = issueTypeSimpleTask
+    issueParams.summary = "Верстка сайта"
+    issueParams.description = "Для нового издания необходимо сверстать главную страницу и стартовые страницы разделов"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Завести издания для рассылок"
+    issueParams.description = "# Завести издания для рассылок (Подключить механизм подписки/отписки в БО и на сайтах СС)\n" +
+               "# Прописать издания для отписок\n"+
+               "# Обеспечить корректное формирование файла для Сендсей и отправку корректных подписок"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить оценочную нападалку"
+    issueParams.description = "Подключить оценочную нападалку"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Сделать страницу о системе"
+    issueParams.description = "Для новой Системы необходимо создать и наполнить промо-страницу\n"+
+        		"# Сделать скриншоты соответствующих областей сайта для вставки на промо\n"+
+        		"# Обязательные пути реестра (https://docs.google.com/spreadsheets/d/1LYZ1e8YV58PhFmt7QzxET2ZoUPZaf9RmZAM3cTeJRdQ/edit?usp=sharing)\n"+
+        		"# Сделать отображение промо-страницы на сайте Системы"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Провести индексацию и подключить 'Документ на контроле'"
+    issueParams.description = "Для нового издания необходимо:\n"+
+        		"# Провести индексацию документов и выложить на проки и RT\n"+
+        		"# Подключить издания Системы к рассылкам 'Документ на контроле' \nЗадача для админом (Н. Цветкова)"
+    cloneMapToList(issueParamsList, issueParams)
+
+    issueParamsList.each {
+        def issue = createTaskInEpic(currentUser,it)
+        issueList.add(issue) 
+        log.warn("issue ${issue.key} ${issue.summary}")
+        //log.warn("issueParams ${it.summary}")
+    }
+    // сбрасываем задачи
+    issueParamsList.clear()
+    
+//======================================================================================================================================
+// создаем эпик в команде тех. поддержки
+//====================================================================================================================================== 
+    issueParams.project = projectObjOAM
+    issueParams.priorityId = priorityHighId
+    issueParams.epic = issueSSEpic
+    issueParams.issueType = issueTypeEpic
+    issueParams.summary = "Поддержка"
+    issueParams.description = "Пул задач для новой системы/издания"
+    def issueOAMEpic = createEpic(currentUser,issueParams)
+    // связываем эпик SS и OAM
+	ComponentAccessor.issueLinkManager.createIssueLink(issueOAMEpic.id, issueSSEpic.id, Long.parseLong("10501"), Long.valueOf(0), currentUser);
+    issueList.add(issueOAMEpic) 
+    log.warn("issue ${issueOAMEpic.key} ${issueOAMEpic.summary}")
+    
+    // создаем задачи в эпике
+    issueParams.project = projectObjOAM
+    issueParams.priorityId = priorityHighId
+    issueParams.epic = issueOAMEpic
+    issueParams.issueType = issueTypeTask
+    issueParams.summary = "Завести код счетчика GTM"
+    issueParams.description = "Прошу предоставить код GTM для встраивания в новое издание"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Настроить ГА, ЯМ и статистику ПС"
+    issueParams.description = "Требуется для нового издания\n"+
+               "# Встроить код счетчиков ГА и ЯМ в GTM\n"+
+         		"# Создать представления для Системы в ГА и ЯМ\n"+
+         		"# Проверить на тестовых, что данные для ПС пишутся\n\n"+
+         		"После ввода Системы в промышленную эксплуатацию:\n"+
+         		"# Провести тестирование Системы в рамках задачи\n"+
+         		"# Зарегистрировать найденные дефекты\n"+
+         		"# Выдать необходимые доступы к Системе\n"+
+         		"# Проверить, что данные для ПС пишутся\n"+
+        		"# Включить обработку системы на сервере статистики и для CRM\n"+
+         		"# Настроить и проверить в ПС основные отчёты"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить горячую линию"
+    issueParams.description = "Для новой Системы необходимо подключить сервис Горячей линии\n"+
+         		"[Инструкция|http://conf.action-media.ru/x/eorvAQ]\n"+
+         		"# Подключить серверную часть ГЛ\n"+
+         		"# Настроить ссылку на документ с правилами ГЛ\n"+
+         		"# Настроить примеры ответов ГЛ\n"+
+         		"# Настроить ссылку на документ по готовым ответам от редакции\n\n"+
+         		"Данные, необходимые для подключения ГЛ, указаны в чек-листе [Чек-листы по подключаемому функционалу|https://conf.action-media.ru/pages/viewpage.action?pageId=91669138]"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить онлайн-помощника"
+    issueParams.description = "Для нового издания необходимо подключить сервис ОП"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить автописьма"
+    issueParams.description = "Для новой Системы необходимо подключить отправку автописем через Сендсей\n"+
+        		"# Запросить у бизнеса данные по шаблонам писем (бизнес заводит шаблоны в Сендсей самостоятельно)\n"+
+        		"# ID шаблонов для каждого письма из каждой серии\n"+
+        		"# Прописать ID шаблонов в реестре"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить возможность переноса избранного"
+    issueParams.description = "Для новой Системы необходимо настроить перенос избранного\n"+
+        		"# В узле реестра (actiondigital|systemSite|fav|transfer) прописать идентификаторы изданий Системы через запятую к остальным идентификаторам изданий\n"+
+        		"# Провести тестирование Системы в рамках задачи"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить мониторинг Аптайминспектор"
+    issueParams.description = "Для новой Системы необходимо подключить мониторинг Аптайминспектор\n"+
+        		"# ОЭ (Леденева Е.)\n"+
+        		"## Подключить сайты Системы к мониторингу Аптайминспектор\n"+
+        		"## Обновить документацию (http://conf.action-media.ru/pages/viewpage.action?pageId=65378956)\n"+
+        		"### Сервисы и сайты, подключенные к проверкам через АИ\n"+
+        		"### Сотрудники, подключенные к смс-оповещениям от АИ\n"+
+        		"### Шаблон письма для экстренного оповещения о проблемах"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить функционал отправки заявки на презентацию с промо и 'письмо коллеге'"
+    issueParams.description = "Для новой Системы необходимо прописать e-mail-ы ответственных от редакции Системы по обработке заказов презентаций с промо-страницы\n"+
+        		"# Запросить у редакции адрес эл. почты для получения заявок на презентацию Системы\n"+
+        		"# Настроить получателя в реестре\n"+
+        		"# Подключение письма коллеге со страницы 'О Системе' происходит через реестр actiondigital|serviceLetters|aboutLetter"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить адресатов для оценок редакционных материалов и поиска"
+    issueParams.description = "Для новой Системы необходимо прописать e-mail-ы ответственных от редакции Системы по обработке оценок редакционных материалов и поиска\n"+
+        		"# Запросить у редакции адрес эл. почты для получения оценок редакционных материалов и поиска\n"+
+        		"# Настроить получателя в реестре:\n"+
+        		"## Оценки ред. Материалов (actiondigital|serviceLetters|docsRating)\n"+
+        		"## Оценки поиска (actiondigital|serviceLetters|searchEval)"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Настроить письма со страницы 'О системе'"
+    issueParams.description = "Необходимо настроить стандартный функционал отправки писем с промо-страницы\n"+
+        		"# serviceLetters|aboutLetter\n"+
+        		"# serviceLetters|vip.presentation"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Подключить сервисные письма"
+    issueParams.description = "# Настроить отправку сервисных писем с указанных адресов в реестре\n"+
+        		"## В реестре есть узел Актион диджитал/Сервисные письма\n"+
+        		"## В нем надо посмотреть все дочерние узлы и, там где есть перегрузка по изданиям, добавить перегрузку для системы\n"+
+        		"# Подключаются письма:\n"+
+        		"## Подтверждение регистрации\n"+
+        		"## Получение доступа (демо, оплаченный, ознакомительный, предемо, бонусный)\n"+
+        		"## Изменение адреса эл.почты / Изменение телефона / Изменение пароля\n"+
+        		"## Письмо коллеге с промостраницы"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Настроить HTTPS"
+    issueParams.description = "# Для доменов новой Системы необходимо купить и установить SSL-сертификат [инструкция|http://conf.action-media.ru/x/NYrXAg]\n"+
+        		"# Сгенерировать файл CSR\n"+
+        		"# Настроить почту администратора домена\n"+
+        		"# Если сертификат отсутствует\n"+
+                "## Заказать сертификат [инструкция|http://conf.action-media.ru/x/NYrXAg]\n"+
+                "## Оплатить счет\n"+
+                "## Отправить заказ\n"+
+                "## Получить файл сертификата\n"+
+                "## Установить сертификат на площадке\n"+
+                "## Проверить установленный сертификат [инструкция|https://habrahabr.ru/company/hosting-cafe/blog/280442]\n"+
+                "# прописать ssl-сертификаты в ИИС"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Выдать доступы"
+    issueParams.description = "Необходимо выдать доступы к новой Системе (изданию) для пользователей, имеющих доступы ко всем системам (изданиям системы) [инструкция|http://conf.action-media.ru/pages/viewpage.action?pageId=46206729#id-Предоставлениедоступовдлясотрудников-Доступыдлясотрудниковредакцийируководства]\n"+
+        		"# Выдать доступы к новой Системе (изданию) для пользователей, имеющих доступы ко всем системам (изданиям системы)"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Включить проверки Системы в утреннее смоук-тестирование"
+    issueParams.description = "# Включить проверки Системы в утреннее смоук-тестирование [инструкция|http://conf.action-media.ru/x/LgHvAg]\n"+
+        		"# Включить проверку Системы в утренние автотесты"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Добавить Пользовательское соглашение, Политику обработки данных, Положения"
+    issueParams.description = "Необходимо добавить информацию о новой системе для отображения её на странице 3 в 1: Пользовательское соглашение, Политика обработки данных, Положение [инструкция|http://conf.action-media.ru/x/WI18Aw]\n"+
+        		"# Добавить правки по новой системе через реестр Актион диджитал/Сайт системы/Пользовательское соглашение:\n"+
+        		"## Название\n"+
+        		"## Информация"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Добавить лицензию к FlowPlayer"
+    issueParams.description = "Необходимо сформировать ключ лицензии FlowPlayer и прописать данный ключ в реестре [инструкция|http://conf.action-media.ru/pages/viewpage.action?pageId=65378454]\n"+
+        		"# Добавить правки по новой системе через реестр actiondigital|systemSite|flowplayer (Актион диджитал/Сайт системы/Лицензии-ключи для FlowPlayer)"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Завести данные в БО ID2"
+    issueParams.description = "Необходимо завести данные в БО ID2\n"+
+                "Информация по AppID и урлам приложений находится в эпике разработки команды SS\n\n"+
+                "# Если данные нужно прописать для новой системы:\n"+
+                "## Решить задачу в соответствии с руководством [Добавить домен к Приложению (прописать сайт в БО ID2)|https://conf.action-media.ru/pages/viewpage.action?pageId=65382812#id-%D0%A0%D1%83%D0%BA%D0%BE%D0%B2%D0%BE%D0%B4%D1%81%D1%82%D0%B2%D0%BE%D0%BF%D0%BE%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%BA%D0%B5%D0%98%D0%942%D0%B4%D0%BB%D1%8F%D0%92%D0%A1%D0%A1-%D0%94%D0%BE%D0%B1%D0%B0%D0%B2%D0%B8%D1%82%D1%8C%D0%B4%D0%BE%D0%BC%D0%B5%D0%BD%D0%BA%D0%9F%D1%80%D0%B8%D0%BB%D0%BE%D0%B6%D0%B5%D0%BD%D0%B8%D1%8E(%D0%BF%D1%80%D0%BE%D0%BF%D0%B8%D1%81%D0%B0%D1%82%D1%8C%D1%81%D0%B0%D0%B9%D1%82%D0%B2%D0%91%D0%9EID2)]\n"+
+                "## Appid и Secret Key прописывает в реестре, путь к основному узлу (actiondigital|systemSite|id2Info)\n"+
+                "## Проверить на прототипе\n"+
+                "# Если данные нужно прописать для нового издания существующей системы:\n"+
+                "## Решить задачу в соответствии с [руководством|https://conf.action-media.ru/pages/viewpage.action?pageId=65382812#id-%D0%A0%D1%83%D0%BA%D0%BE%D0%B2%D0%BE%D0%B4%D1%81%D1%82%D0%B2%D0%BE%D0%BF%D0%BE%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%BA%D0%B5%D0%98%D0%942%D0%B4%D0%BB%D1%8F%D0%92%D0%A1%D0%A1-%D0%94%D0%BE%D0%B1%D0%B0%D0%B2%D0%B8%D1%82%D1%8C%D0%B4%D0%BE%D0%BC%D0%B5%D0%BD%D0%BA%D0%9F%D1%80%D0%B8%D0%BB%D0%BE%D0%B6%D0%B5%D0%BD%D0%B8%D1%8E(%D0%BF%D1%80%D0%BE%D0%BF%D0%B8%D1%81%D0%B0%D1%82%D1%8C%D1%81%D0%B0%D0%B9%D1%82%D0%B2%D0%91%D0%9EID2)]\n"+
+                "# Прописать publication code в событиях для ID2 в реестре\n"+
+                "# Закрыть задачу, проставив резолюцию 'Готова'"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Реализовать стандартную клиентскую часть. Изменение реестра"
+    issueParams.description = "Необходимо в реестре произвести настройку изданий\n"+
+        		"* [Перечень узлов для изменения|https://docs.google.com/spreadsheets/d/1LYZ1e8YV58PhFmt7QzxET2ZoUPZaf9RmZAM3cTeJRdQ/edit#gid=0]\n"+
+       		 	"** В каких-то случаях нужно добавить копию узла, в каких-то случаях добавить перезагрузку.\n"+
+        		"* Настроить плашку доступа к другому изданию (добавить в реестр actiondigital|systemSite|authorization|anotherPubAccess|settings|pubs все издания системы через пробел, выставить соответствующую перегрузку)\n"+
+        		"* Если это новая система, то сделать регистрацию нового альфа-имени для СМС в smsc или gmsu http://conf.action-media.ru/pages/viewpage.action?pageId=65381586"
+    cloneMapToList(issueParamsList, issueParams)
+    
+    issueParamsList.each {
+        def issue = createTaskInEpic(currentUser,it)
+        issueList.add(issue) 
+        log.warn("issue ${issue.key} ${issue.summary}")
+        //log.warn("issueParams ${it.summary}")
+    }
+    // сбрасываем задачи
+    issueParamsList.clear()
+    
+//======================================================================================================================================
+// создаем эпик в команде старых инструментов
+//====================================================================================================================================== 
+    issueParams.project = projectObjOLDINSTR
+    issueParams.priorityId = priorityMajorId
+    issueParams.epic = issueSSEpic
+    issueParams.issueType = issueTypeEpic
+    issueParams.summary = "Завести метаданные"
+    issueParams.description = "Требуется развернуть новое издание\n"+
+               "Завести в РБД метаднные системы (если нужно) и издания:\n"+
+               "# SysID;\n"+
+               "# PubID;\n"+
+               "# заполнить информацию в КФ http://conf.action-media.ru/x/mxS8Aw;\n"+
+               "# завести/скопировать в РБД виджеты для стартовых страниц сайта Системы (https://conf.action-media.ru/x/c512BQ);\n"+
+               "# добавить новую систему в srv17.incrOrg.dbo.LastPublic\n\n"+
+               "Опционально:\n"+
+               "# (+) (-) заполнить данные НЕ уникальных стартовых страниц, подлежащих копированию из другой СС;\n"+
+               "# (+) (-) завести систему издания для старого календаря СС (на 15.11.2018 есть два разных календаря, календарь платформы прописывать не надо);\n"+
+               "# (+) (-) завести в РБД RubricatorID;\n"+
+               "# (+) (-) заполнить/скопировать данные рубрикаторов по требованиям;\n"+
+               "# (+) (-) заполнить журнальные полки, сделать привязку журналов к изданиям и рубрикаторам в РБД;\n"+
+               "# (+) (-) копирование стартовых страниц и календаря;\n"+
+               "# (+) (-) перенос данных календаря (при создании издания для существующей системы);\n"+
+               "# (+) (-) перенос бэклинков;"
+    def issueOLDINSTREpic = createEpic(currentUser,issueParams)
+    // связываем эпик SS и OLDINSTR
+	ComponentAccessor.issueLinkManager.createIssueLink(issueOLDINSTREpic.id, issueSSEpic.id, Long.parseLong("10501"), Long.valueOf(0), currentUser);
+    issueList.add(issueOLDINSTREpic) 
+    log.warn("issue ${issueOLDINSTREpic.key} ${issueOLDINSTREpic.summary}")
+    
+    // создаем задачи в эпике
+    issueParams.project = projectObjOLDINSTR
+    issueParams.priorityId = priorityMajorId
+    issueParams.epic = issueOLDINSTREpic
+    issueParams.issueType = issueTypeTask
+    issueParams.summary = "Заполнить данные для промо-страницы"
+    issueParams.description = "Для новой Системы необходимо создать и наполнить промо-страницу\n"+
+         		"# Заполнить необходимые данные (желтая плашка, блок авторов) для промо-страницы в РБД6"
+    cloneMapToList(issueParamsList, issueParams)
+    
+    issueParamsList.each {
+        def issue = createTaskInEpic(currentUser,it)
+        issueList.add(issue) 
+        log.warn("issue ${issue.key} ${issue.summary}")
+        //log.warn("issueParams ${it.summary}")
+    }
+    // сбрасываем задачи
+    issueParamsList.clear()
+    
+//======================================================================================================================================
+// создаем эпик в команде документов
+//====================================================================================================================================== 
+    issueParams.project = projectObjSSD
+    issueParams.priorityId = priorityMajorId
+    issueParams.epic = issueSSEpic
+    issueParams.issueType = issueTypeEpic
+    issueParams.summary = "Подключить ресурсы и публикатор"
+    issueParams.description = "Необходимо:\n"+
+                "# Подключить заведенные ресурсы в метабазе SWMD\n"+
+                "# Доработать публикатор контента\n"+
+                "# Доработать публикатор поискового индекса\n"+
+                "# Прописать названия разделов в реестре"
+    def issueSSDEpic = createEpic(currentUser,issueParams)
+    // связываем эпик SS и SSD
+	ComponentAccessor.issueLinkManager.createIssueLink(issueSSDEpic.id, issueSSEpic.id, Long.parseLong("10501"), Long.valueOf(0), currentUser);
+    issueList.add(issueSSDEpic) 
+    log.warn("issue ${issueSSDEpic.key} ${issueSSDEpic.summary}")
+    
+    // создаем задачи в эпике
+    issueParams.project = projectObjSSD
+    issueParams.priorityId = priorityMajorId
+    issueParams.epic = issueSSDEpic
+    issueParams.issueType = issueTypeTask
+    issueParams.summary = "Подключить заведенные ресурсы в метабазе SWMD"
+    issueParams.description = "Для нового издания необходимо подключить заведенные ресурсы в метабазе SWMD"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Доработать публикатор контента"
+    issueParams.description = "Для нового издания необходимо доработать публикатор контента"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Доработать публикатор поискового индекса"
+    issueParams.description = "Для нового издания необходимо доработать публикатор поискового индекса"
+    cloneMapToList(issueParamsList, issueParams)
+    //
+    issueParams.summary = "Прописать названия разделов в реестреа"
+    issueParams.description = "Для нового издания необходимо прописать названия разделов в реестре"
+    cloneMapToList(issueParamsList, issueParams)
+    
+    issueParamsList.each {
+        def issue = createTaskInEpic(currentUser,it)
+        issueList.add(issue) 
+        log.warn("issue ${issue.key} ${issue.summary}")
+        //log.warn("issueParams ${it.summary}")
+    }
+    // сбрасываем задачи
+    issueParamsList.clear()
+    
+//======================================================================================================================================
+// создаем эпик в команде поиска
+//====================================================================================================================================== 
+    issueParams.project = projectObjSRCH
+    issueParams.priorityId = priorityMajorId
+    issueParams.epic = issueSSEpic
+    issueParams.issueType = issueTypeEpic
+    issueParams.summary = "Подключение поиска СС и судебной практики"
+    issueParams.description = "Для нового издания необходимо подключить поиск по документам и в судебной практике:\n"+
+                "# Подключить на сайте поиск по документам Системы\n"+
+                "# Завести в БД поисковые теги, подсказки, эталоны для документов Системы\n"+
+                "# Подключить Систему к СРК\n"+
+                "# Прописать в реестре новые издания для работы СРК"
+    def issueSRCHEpic = createEpic(currentUser,issueParams)
+    // связываем эпик SS и SRCH
+	ComponentAccessor.issueLinkManager.createIssueLink(issueSRCHEpic.id, issueSSEpic.id, Long.parseLong("10501"), Long.valueOf(0), currentUser);
+    issueList.add(issueSRCHEpic) 
+    log.warn("issue ${issueSRCHEpic.key} ${issueSRCHEpic.summary}")
+
+
+Response.ok().type(MediaType.TEXT_HTML).entity(resultValue.toString()).build()  
+}
