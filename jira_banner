@@ -1,0 +1,1876 @@
+var script_version = '1.5'
+var devName = "_"
+
+var log_level = 0;
+var logPrefix = devName+"Custom script: ";
+
+var jiraTaskURL = "https://jira.action-media.ru/browse/"
+var jiraURL = "https://jira.action-media.ru"
+var jiraAPIGetIssue = jiraURL+"/rest/api/2/issue/"
+var jiraAPIPostIssue = jiraURL+"/rest/api/2/issue/"
+
+var backlogGridClass = "ghx-backlog-group";
+var activeSprintGridClass = "ghx-sprint-active";
+var activeSprintGridIssueClass = "js-issue";
+var activeSprintGridIssueAttribute = "data-issue-key";
+var stateCustomClass = "sfaulunsad";
+var extraFieldsParentClass = "ghx-plan-extra-fields";
+var extraFieldEstimateClass = "ghx-extra-field-estimate";
+var extraEpicPanelClass = "ghx-row-version-epic-subtasks";
+var epicTaskListElemSpanId = "epicTaskListElemSpanId";
+var epicTableNewRowHeaderId = "epicTableNewRowHeaderId";
+var epicTableNewRowBottomId = "epicTableNewRowBottomId";
+
+var refreshStopped = false;
+var canUseScriptForUpdateStates = false; // определяет разрешения для отображения статуса на доске бэклога
+var DEBUG = true; // определяет необходимость детального логирования
+var countUpdate = 0; // вычисляет кол-во обновлений статусов на доске бэклога
+const toolsTableButtonStartCalculationId = 'toolsTableButtonStartCalculation'+devName;
+
+var backend_count = 0;
+var frontend_count = 0;
+var req_count = 0;
+var test_count = 0;
+var design_count = 0;
+var current_issue_data = {};
+    current_issue_data['isSmartDlgFirst'] = true;
+
+document.addEventListener("DOMContentLoaded", DOMContentLoaded());
+Smart_log(`script_version = ${script_version}`);
+
+function Log(value){
+    var prefix = "Test script: ";
+    if (DEBUG) console.log(prefix+value);
+}
+function Smart_log(value){
+    var l = '';
+    for(var i = 0; i<log_level; i++) l+="|-";
+    console.log(logPrefix+l+value);
+}
+function SetGlobalConfig(){
+    // скрываем доп. информацию в строке задачи
+    $("head").append($("<style type='text/css'>.ghx-issue-compact .ghx-plan-extra-fields.ghx-plan-extra-fields.ghx-row {display: none;} .ghx-extra-field {display: none;} </style>"));
+    //$("head").append($("<style type='text/css'> ghx-extra-field {display: none;} </style>"));
+
+    // в задачах без фикс и эпика добавляем div и и переносим узел с assigne и оценкой
+
+}
+
+// определяем параметры url
+function getUrlParams(){
+    var params = window
+    .location
+    .search
+    .replace('?','')
+    .split('&')
+    .reduce(
+        function(p,e){
+            var a = e.split('=');
+            p[ decodeURIComponent(a[0])] = decodeURIComponent(a[1]);
+            return p;
+        },
+        {}
+    );
+    return params;
+}
+
+function GetIssueByParams(issueKey,searchParams){
+    log_level++;
+    var ln = "GetIssueByParams: ";
+    const start= new Date().getTime();
+
+    var result = null;
+    //Smart_log(ln+JIRA.Issue.getIssueKey());
+    //Smart_log(ln+AJS.Meta.get("issue-key"));
+
+    let url = new URL(jiraURL+"/rest/api/2/issue/"+issueKey);
+    if (searchParams) {
+        for (let x of searchParams) {
+            url.searchParams.set(x.key, x.value);
+        }
+    }
+    url.searchParams.set('CustomSource', 'AB_GetIssueByParams'); // CustomSource=AnnouncementBanner CustomSource=AB_GetIssueTimetracking CustomSource=AB_GetIssue CustomSource=AB_GetIssueByParams
+
+    //Smart_log(ln+`url ${url}`);
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url, false);
+    //xhr.setRequestHeader('SOAPAction', 'AnnouncementBanner');
+
+    xhr.send();
+    //document.getElementById("customfield_10800").value = obj.badges[1].id;
+    //Smart_log(ln+xhr.status); // Равен кодам HTTP (200 - успешно, 404 не найдено, 301 - перенесено навсегда)
+    //Smart_log(ln+xhr.statusText);
+    //Smart_log(ln+xhr.responseText);
+
+    // 4. Этот код сработает после того, как мы получим ответ сервера
+    //xhr.onload = function() { // только для асинхронки
+    if (xhr.status != 200) { // анализируем HTTP-статус ответа, если статус не 200, то произошла ошибка
+        //Smart_log(ln+`Ошибка ${xhr.status}: ${xhr.statusText}`);
+    } else { // если всё прошло гладко, выводим результат
+        //Smart_log(ln+`Готово, получили ${xhr.response.length/1024} Kбайт`);
+        result = xhr.responseText;
+    }
+    //};
+
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+    return result;
+}
+function GetGlobalPermissions(){
+    var ln = "GetGlobalPermissions: ";
+    log_level++;
+    const start= new Date().getTime();
+    let objGlobalPermissions = [];
+    var urlParams = getUrlParams();
+    // проверяем, находимся ли мы на какой-либо доске
+    // "rapidView":"136","key":"ViewEstimationsOnPlaning"
+    if ('rapidView' in urlParams) {
+        Smart_log(`${ln} Мы на доске ${urlParams['rapidView']} `);
+        Smart_log(`${ln} Получение разрешений, связанных с досками`);
+        var issueKey_rapidView = 'PSQL-222'; // 'PSQL-223'
+        var requestParams = [{key:'fields',value:'description'},{key:'Detail',value:'GetGlobalPermissions'}];
+        var objPermissionsData = JSON.parse(GetIssueByParams(issueKey_rapidView, requestParams));
+        if (objPermissionsData) {
+            if ('fields' in objPermissionsData && objPermissionsData.fields != null) {
+                if ('description' in objPermissionsData.fields && objPermissionsData.fields.description != null) {
+                    Smart_log(`${ln} Разрешения по задаче ${issueKey_rapidView} получены`);
+                    //Smart_log(`${ln} ${JSON.stringify(objPermissionsData)}`);
+                    // очистка данных
+                    var x = JSON.stringify(objPermissionsData.fields.description).replace(/{code:json}|{code}|\\r|\\n|\\/g, '');
+                    x = x.replace(/"\[{/g, '[{');
+                    x = x.replace(/}\]"/g, '}]');
+                    //Smart_log(`${ln} replace =  ${x}`);
+                    var objPermissions;
+                    try {
+                        objPermissions = JSON.parse(x);
+                        //for(var i=0; i<objPermissions.length; i++) { Smart_log(`${ln} Данные rapidView =  ${objPermissions[i].rapidView}`); }
+                        for (let objPermission of objPermissions) {
+                            //Smart_log(`${ln} Данные rapidView =  ${objPermission.rapidView}`);
+                            // нужно получить все данные по нашей доске, наборов может быть несколько
+                            // в каждом наборе по коду процесса получить необходимые данные
+                            if (objPermission.rapidView == urlParams['rapidView']) {
+                                objGlobalPermissions.push(objPermission);
+                                //Smart_log(`${ln} Для доски найдено разрешение  ${objPermission.key}`);
+                            }
+                        }
+                    } catch (e) {
+                        //console.log(e instanceof SyntaxError); // true
+                        //console.log(e.message);                // "missing ; before statement" - перед инструкцией отсутствует символ ;
+                        //console.log(e.name);                   // "SyntaxError"
+                        //console.log(e.fileName);               // "Scratchpad/1"
+                        //console.log(e.lineNumber);             // 1
+                        //console.log(e.columnNumber);           // 4
+                        //console.log(e.stack);                  // "@Scratchpad/1:2:3\n"
+                        Smart_log(`${ln} ${e.name} ${e.message}`);
+                    }
+                } else Smart_log(`${ln} Данные objPermissionsData.fields.description отсутствуют`);
+            } else Smart_log(`${ln} Данные objPermissionsData.fields отсутствуют`);
+        } else {
+            Smart_log(`${ln} Разрешения по задаче ${issueKey_rapidView} не были получены`);
+        }
+    }
+
+    // если разрешения были получены - запускаем обработчики правил
+    if (objGlobalPermissions.length>0) {
+        var tDelay = 200; setTimeout(ApplyRules, tDelay, objGlobalPermissions); Smart_log(ln+`Запуск setTimeout(ApplyRules, ${tDelay})`);
+    }
+
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+}
+function ApplyRules(objGlobalPermissions){
+    var ln = "ApplyRule: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    for (let objPermission of objGlobalPermissions) {
+        var tDelay = 200;
+        if ( 'processes' in objPermission && objPermission.processes !== null && objPermission.processes.length > 0) {
+            // обходим массив процессов
+            for (let process of objPermission.processes) {
+                //Smart_log(`${ln} process.key= ${process.key}`);
+                switch(process.key) {
+                    case "ViewEstimationsOnPlaning": {
+                        setTimeout(ApplyRuleViewEstimationsOnPlaning, tDelay, objPermission);
+                        break; }
+                }
+            }
+        } else Smart_log(`${ln} Данные по доступным процессам не получены. Проверьте в конфиге секцию process`);
+    }
+
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+}
+function ApplyRuleViewEstimationsOnPlaning(objPermission){
+    var ln = "ApplyRuleViewEstimationsOnPlaning: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    // добавляем на панель кнопку запуска расчета
+    var toolsTable = document.getElementById("ghx-modes-tools");
+    if (toolsTable !== null) {
+        var toolsTableButtonStartCalculation = document.getElementById(toolsTableButtonStartCalculationId);
+        if (toolsTableButtonStartCalculation === null) {
+            toolsTableButtonStartCalculation = document.createElement('button');
+            toolsTableButtonStartCalculation.id = toolsTableButtonStartCalculationId;
+            toolsTableButtonStartCalculation.innerHTML = "Расчет"+devName;
+            toolsTableButtonStartCalculation.onclick = function() { CalcWorkloadfutureSprint(objPermission); }
+            toolsTableButtonStartCalculation.className="aui-button";
+            //toolsTableButtonStartCalculation.style.display = "inline";
+            //toolsTableButtonStartCalculation.style.border = "1px solid black";
+            toolsTableButtonStartCalculation.style.marginLeft = "5px"
+            //toolsTableButtonStartCalculation.style.padding = "5px"
+            //toolsTableButtonStartCalculation.style.color = "black"
+            // проверяем, что будущий спринт существует. Если его нет, то дизейблим кнопку
+            //if (GetFutureSprintId() == -1 ) toolsTableButtonStartCalculation.disabled = true;
+            toolsTable.appendChild(toolsTableButtonStartCalculation);
+        }
+    }
+
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+}
+function GetFutureSprintId(){
+    var ln = "GetFutureSprintId: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    var result = -1;
+    var elFutureSprint = GetFirstFutureSprintByHtmlAsElement();
+    if (elFutureSprint !== null) {
+        var futureSprintId = elFutureSprint.getAttribute("data-sprint-id");
+        if (futureSprintId !== null) {
+            result = futureSprintId
+        }
+    }
+
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+
+    return result
+}
+function CalcWorkloadfutureSprint(objPermission){
+    var toolsTableButtonStartCalculation = document.getElementById(toolsTableButtonStartCalculationId);
+        if (toolsTableButtonStartCalculation !== null) {
+            toolsTableButtonStartCalculation.style.backgroundColor = "#FF7A83"
+        }
+    var tDelay = 200; setTimeout(CalcWorkloadfutureSprintMain, tDelay, objPermission);
+}
+function CalcWorkloadfutureSprintMain(objPermission){
+    var ln = "CalcWorkloadfutureSprint: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    // получаем будущий спринт
+    var futureSprintId = GetFutureSprintId(); //2737
+    if (futureSprintId > -1) {
+
+        var jqlQuery = `Sprint =${futureSprintId} and status != Closed `;
+        var requestParams = [{key:'maxResults',value:'150'},{key:'jql',value:jqlQuery},{key:'fields',value:'assignee,customfield_11304'},{key:'Detail',value:'CalcWorkloadfutureSprint'}];
+        // получаем результаты запроса - массив задач
+        var objIssues = JSON.parse(GetIssuesByQuery(jqlQuery,requestParams));
+        //Smart_log(`${ln} objIssues = ${JSON.stringify(objIssues)}`);
+
+        if (objIssues) {
+            if ('total' in objIssues && objIssues.total > 0) {
+                var futureSprintTasks = [];
+                // обходим полученные задачи
+                for (let objIssue of objIssues.issues) {
+                    var assignee = "";
+                    if ( 'assignee' in objIssue.fields && objIssue.fields.assignee !== null && 'key' in objIssue.fields.assignee ) {
+                        assignee=objIssue.fields.assignee.key
+                    } else {
+                        Smart_log(`${ln} У задачи ${objIssue.key} не указан assignee`);
+                    };
+                    var sprintTaskInfo = {
+                        issueKey:objIssue.key,
+                        assignee:assignee,
+                        roles :[{key:"Developers", assignee:"", estimate:0},{key:"QA", assignee:"", estimate:0}]
+                    }
+                    // обрабатывам роли из задачи
+                    if ( 'customfield_11304' in objIssue.fields && objIssue.fields.customfield_11304 !== null) {
+                        for (let roleCustomField of objIssue.fields.customfield_11304) {
+                            var roleLogin = ParseRoleLogin(roleCustomField);
+                            //Smart_log(`${ln} ParseRoleLogin = ${roleLogin}, roleCustomField = ${roleCustomField}`);
+                            var roleCode = ParseRoleCode(roleCustomField);
+                            //Smart_log(`${ln} ParseRoleCode = !${roleCode}!`);
+
+                            switch(roleCode) {
+                                    case "10206": {
+                                        for(let role of sprintTaskInfo.roles) {
+                                            if (role.key == "Developers") { role.assignee = roleLogin }
+                                        }
+                                        break;
+                                    }
+                                    case "10404": {
+                                        for(let role of sprintTaskInfo.roles) {
+                                            if (role.key == "QA") { role.assignee = roleLogin }
+                                        }
+                                        break;
+                                    }
+                            }
+                        }
+                    }
+                    //Smart_log(`${ln} sprintTaskInfo.issueKey: ${sprintTaskInfo.issueKey} sprintTaskInfo.assignee: ${sprintTaskInfo.assignee} sprintTaskInfo.roles[0]: ${sprintTaskInfo.roles[0].key} ${sprintTaskInfo.roles[0].assignee} sprintTaskInfo.roles[1]: ${sprintTaskInfo.roles[1].key} ${sprintTaskInfo.roles[1].assignee}`);
+/*
+customfield_11304": [
+          "Role: 10206 (cherkasov)",
+          "Role: 10404 (kusakin)",
+          "Role: 10900 (a.ivanov)"
+        ]
+*/
+                    // добавляем данные по задачам в массив
+                    futureSprintTasks.push(sprintTaskInfo);
+                    //Smart_log(`${ln} sprintTaskInfo.issueKey = ${sprintTaskInfo.issueKey}, sprintTaskInfo.key = ${sprintTaskInfo.assignee}`);
+                }
+
+                if (futureSprintTasks.length>0) {
+                    // для каждой задачи получаем информацию по оценке
+                    for (let futureSprintTask of futureSprintTasks) {
+                        //Smart_log(`${ln} для каждой задачи получаем информацию по оценке futureSprintTask.issueKey = ${futureSprintTask.issueKey}`);
+                        var objIssueTimetracking = JSON.parse(GetIssueTimetracking(futureSprintTask.issueKey));
+                        if (objIssueTimetracking) {
+                            //Smart_log(`${ln} objIssueTimetracking = ${JSON.stringify(objIssueTimetracking)}`);
+                            if ('estimates' in objIssueTimetracking) {
+                                if (objIssueTimetracking.estimates.length > 0) {
+                                    // обходим имеющиеся оценки
+                                    for(var r=0; r<objIssueTimetracking.estimates.length; r++) {
+                                        for(var ro=0; ro<futureSprintTask.roles.length; ro++) {
+                                            //Smart_log(ln+` ${futureSprintTask.issueKey} ${objIssueTimetracking.estimates[r].role} ${futureSprintTask.roles[ro].key}`);
+                                            if (objIssueTimetracking.estimates[r].role == futureSprintTask.roles[ro].key)
+                                            {
+                                                if ("remainingEstimateSeconds" in objIssueTimetracking.estimates[r]) { // originalEstimateSeconds
+                                                    futureSprintTask.roles[ro].estimate = objIssueTimetracking.estimates[r].remainingEstimateSeconds;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else Smart_log(ln+`отсутствуют данные objIssueTimetracking`);
+                            } else Smart_log(ln+`отсутствуют данные estimates (issueKey=${objIssueTimetracking.key})`);
+                        } else Smart_log(ln+`GetIssueTimetracking - данные не были получены (issueKey=${futureSprintTask.issueKey})`);
+                    }
+                    // вывод данных в лог для отладки
+                    /*for (let futureSprintTask of futureSprintTasks) {
+                        Smart_log(ln+`issueKey: ${futureSprintTask.issueKey}, assignee: ${futureSprintTask.assignee}`);
+                        for (let role of futureSprintTask.roles) {
+                            Smart_log(ln+`role.key: ${role.key}, role.assignee: ${role.assignee}, role.estimate: ${role.estimate}`);
+                        }
+                    }*/
+                    // objPermission - данные по разработчикам
+                    // формируем массив с суммой оценок по каждому разработчику
+                    var developersEstimates = [];
+                    if ('team' in objPermission && objPermission.team != null && objPermission.team.length > 0) {
+                        for (let developer of objPermission.team) {
+                            var developerInfo = {
+                                key:developer.key,
+                                estimate:0,
+                                dataFilterId:developer.dataFilterId,
+                                role:developer.role,
+                                hasTaskWithoutEstimate:false
+                            }
+                            //Smart_log(ln+`developerInfo.key = ${developerInfo.key}, developerInfo.dataFilterId = ${developerInfo.dataFilterId}, developerInfo.role = ${developerInfo.role}`);
+                            // получаем массив задач, назначенный на разработчика
+                            var assigneeTasks = futureSprintTasks.filter(issue => issue.assignee === developer.key)
+                            if (!!assigneeTasks && assigneeTasks.length>0) {
+                                // обходим массив отфильтрованных задач по assignee
+                                for (let task of assigneeTasks) {
+                                    // roles :[{key:"Developers", assignee:"", estimate:0},{key:"QA", assignee:"", estimate:0}]
+                                    // обходим массив ролей в задаче
+                                    for (let taskRole of task.roles) {
+                                        if (taskRole.key == developerInfo.role) {
+                                            if (taskRole.estimate>0) {
+                                                developerInfo.estimate += taskRole.estimate;
+                                            }
+                                            else {
+                                                developerInfo.hasTaskWithoutEstimate = true;
+                                                Smart_log(ln+`task.key = ${task.issueKey}, task.remainingEstimate = ${taskRole.estimate}, task.assignee = ${task.assignee}`);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            developersEstimates.push(developerInfo);
+                        }
+                        UpdateEstimateInfoByDeveloper(developersEstimates);
+
+                    } else Smart_log(`${ln} Нет данных по разработчикам. Проверьте конфиг в задаче`);
+                    // формируем данные по ролям
+                    var rolesEstimates = [];
+                    if ('summaryByRoles' in objPermission && objPermission.summaryByRoles != null && objPermission.summaryByRoles.length > 0) {
+                        for (let role of objPermission.summaryByRoles) { // TO-DO: лишний цикл, кажись. Можно сразу по объекту идти в цикле ниже и там уже заполнять массив
+                            var roleInfo = {
+                                key:role.key,
+                                estimate:0,
+                                unnassigneeDev:0,
+                                dataFilterId:role.dataFilterId
+                            }
+                            //Smart_log(ln+`roleInfo.key = ${roleInfo.key}, roleInfo.dataFilterId = ${roleInfo.dataFilterId}`);
+                            rolesEstimates.push(roleInfo);
+                        }
+                        for (let futureSprintTask of futureSprintTasks) {
+                            for (let roleEstimates of rolesEstimates) {
+                                for (let taskRole of futureSprintTask.roles) {
+                                    if (taskRole.key == roleEstimates.key) {
+                                        if (taskRole.estimate>0) roleEstimates.estimate += taskRole.estimate;
+                                        //Smart_log(ln+`futureSprintTask.issueKey = ${futureSprintTask.issueKey}, taskRole.key = ${taskRole.key}, taskRole.estimate = ${taskRole.estimate}, roleEstimates.key = ${roleEstimates.key}`);
+                                        // обработка задач для роли Developers, у которых не назначен assignee
+                                        // считаем сумму часов для этой роли
+                                        if (taskRole.key == "Developers") {
+                                            if (futureSprintTask.assignee == "") {
+                                                    roleEstimates.unnassigneeDev += taskRole.estimate;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // выводим результат
+                        UpdateEstimateInfoByRole(rolesEstimates);
+                    }
+                }
+            } else Smart_log(`${ln} Нет данных по задачам`);
+        } else Smart_log(`${ln} Объект objIssues не получен`);
+        /**/
+        //alert(`futureSprintId = ${obj}`);
+        //Smart_log(`${ln} obj = ${obj}`);
+
+        // удаляем индикатор
+        var toolsTableButtonStartCalculation = document.getElementById(toolsTableButtonStartCalculationId);
+        if (toolsTableButtonStartCalculation !== null) {
+            toolsTableButtonStartCalculation.style.backgroundColor = "#ECEDF0"
+        }
+
+    } else Smart_log(`${ln} Не найден futureSprintId`);
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+}
+function ParseRoleLogin(value){ // value: "Role: 10206 (cherkasov)"
+    var ln = "ParseRoleLogin: ";
+    var result='';
+
+    var posBegin = value.indexOf("(");
+    if ( posBegin > 0) {
+        var posEnd = value.indexOf(")");
+        if ( (posEnd-posBegin) > 1 ) {
+            result = value.substring(posBegin+1,posEnd);
+        }
+    }
+
+    return result;
+}
+function ParseRoleCode(value){ // value: "Role: 10206 (cherkasov)"
+    var ln = "ParseRoleLogin: ";
+    var result='';
+
+    var posBegin = value.indexOf(":");
+    if ( posBegin > 0) {
+        var posEnd = value.indexOf("(");
+        result = (value.substring(posBegin+1,posEnd)).trim();
+    }
+
+    return result;
+}
+function GetIssuesByQuery(jqlQuery, searchParams){
+    var ln = "GetIssuesByQuery: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    var result = null;
+    let url = new URL(jiraURL+"/rest/api/2/search");
+    if (searchParams) {
+        for (let x of searchParams) {
+            url.searchParams.set(x.key, x.value);
+            //Smart_log(ln+`x.key: ${x.key} x.value: ${x.value}`);
+        }
+    }
+    url.searchParams.set('CustomSource', 'AB_GetIssuesByQuery'); // CustomSource=AnnouncementBanner CustomSource=AB_GetIssueTimetracking CustomSource=AB_GetIssue CustomSource=AB_GetIssueByParams CustomSource=AB_GetIssuesByQuery
+    //Smart_log(ln+`url: ${url}`);
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url, false);
+    xhr.send();
+    if (xhr.status != 200) { // анализируем HTTP-статус ответа, если статус не 200, то произошла ошибка
+        //Smart_log(ln+`Ошибка ${xhr.status}: ${xhr.statusText}`);
+    } else { // если всё прошло гладко, выводим результат
+        //Smart_log(ln+`Готово, получили ${xhr.response.length/1024} Kбайт`);
+        result = xhr.responseText;
+    }
+
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+    return result;
+}
+function DOMContentLoaded(){
+    var ln = "DOMContentLoaded: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    var tDelay = 200; setTimeout(GetGlobalPermissions, tDelay); Smart_log(ln+`Запуск setTimeout(GetGlobalPermissions, ${tDelay})`);
+
+    var urlParams = getUrlParams();
+    switch(urlParams['rapidView']) {
+        case "136": {
+            canUseScriptForUpdateStates = true;
+            SetGlobalConfig();
+            break; }
+    }
+
+    // добавляем кнопку на эпик для получения оценки по задачам
+    tDelay = 500; setTimeout(AddEpicTaskListButtonCalc, tDelay); Smart_log(ln+`Запуск setTimeout(AddEpicTaskListButtonCalc, ${tDelay})`);
+
+    // вешаем событие на кнопку создания СМАРТ задач в инициативе
+    var $issueSmartButton = $('#bcklg-tools-menu-sub-tasks_v3')
+    if ($issueSmartButton.length) {
+        Smart_log(ln+"Найдена кнопка $issueSmartButton");
+        AddBodyHTML();
+        $issueSmartButton.click(function() {
+            SmartDlgShow();
+        });
+    } else Smart_log(ln+"Кнопка $issueSmartButton не найдена");
+
+    const end = new Date().getTime();
+    Smart_log(ln+`Время работы: ${end - start} мс`);
+    log_level--;
+}
+
+function AddBodyHTML(){
+    var ln = "AddBodyHTML: ";
+    log_level++;
+
+    current_issue_data["key"] = AJS.Meta.get("issue-key");
+    current_issue_data["projectKey"] = JIRA.API.Projects.getCurrentProjectKey();
+    var dialog = `
+<section id="demo-dialog" class="aui-dialog2 aui-dialog2-xlarge aui-layer demo-dialog-smart" role="dialog" aria-hidden="true">
+<header class="aui-dialog2-header">
+    <h2 id="smart-dlg-initiative-key">...</h2>
+</header>
+<aui-progressbar id="smart-dialog-progress" value="0" max="0"></aui-progressbar>
+<div class="aui-dialog2-content">
+
+    <fieldset id="fieldset_backend" class="smart-fieldset">
+        <legend>Backend</legend>
+        <button id="btn_backend_add" type="button" class="aui-button aui-button-primary btn_add" data-issue-type:"backend">Добавить</button>
+    </fieldset>
+    <fieldset id="fieldset_frontend" class="smart-fieldset">
+        <legend>Frontend</legend>
+        <button id="btn_frontend_add" type="button" class="aui-button aui-button-primary btn_add" data-issue-type:"frontend">Добавить</button>
+    </fieldset>
+    <fieldset id="fieldset_req" class="smart-fieldset">
+        <legend>Requirements</legend>
+        <button id="btn_req_add" type="button" class="aui-button aui-button-primary btn_add" data-issue-type:"req">Добавить</button>
+    </fieldset>
+    <fieldset id="fieldset_test" class="smart-fieldset">
+        <legend>Testing</legend>
+        <button id="btn_test_add" type="button" class="aui-button aui-button-primary btn_add" data-issue-type:"test">Добавить</button>
+    </fieldset>
+    <fieldset id="fieldset_design" class="smart-fieldset">
+        <legend>Design</legend>
+        <button id="btn_design_add" type="button" class="aui-button aui-button-primary btn_add" data-issue-type:"design">Добавить</button>
+    </fieldset>
+    <fieldset id="fieldset_other" class="smart-fieldset">
+        <legend>Прочее</legend>
+        <form class="aui">
+            <div class="checkbox">
+                <input id="smart_can_create_epic" class="checkbox" type="checkbox" name="checkBoxOne" id="checkBoxOne">
+                <label for="checkBoxOne">Создать эпик в проекте разработки</label>
+            </div>
+            <input id="smart_epic_short_name" class="text medium-field" type="text" name="EpicTaskName" placeholder="Короткое имя" value="">
+        </form>
+    </fieldset>
+
+</div>
+<footer class="aui-dialog2-footer">
+    <div class="aui-dialog2-footer-actions">
+        <button id="smart-dialog-create-button" class="aui-button aui-button-primary">Make it so</button>
+        <button id="smart-dialog-cancel-button" class="aui-button aui-button-link">Отмена</button>
+    </div>
+</footer>
+</section>
+
+<style>
+.demo-dialog-smart {
+   width: 800px;
+}
+
+.smart-fieldset{
+	border-width: 1px;
+    margin-bottom: 15px;
+}
+
+</style>
+`;
+
+    $("body").append(dialog);
+    log_level--;
+}
+function SmartDlgSetButtonStateDisable(value){
+    $("#smart-dialog-create-button").prop('disabled', value);
+    $("#smart-dialog-cancel-button").prop('disabled', value);
+}
+function SmartDlgGetIniciativeDataFromObj(obj){
+    var ln = "SmartDlgShow: ";
+    log_level++;
+
+    var notifyMessage = "";
+
+    //Smart_log(ln+`data input ${JSON.stringify(obj)}`);
+
+    if (obj) {
+        if ('fields' in obj) {
+            if ('components' in obj.fields && obj.fields.components != null) {
+                current_issue_data["components"] = obj.fields.components;
+                // чистим данные для последеюущего прозрачного использования при создании задачи
+                for (let component of current_issue_data.components) {
+                    delete component.self;
+                    delete component.name;
+                }
+                /*
+                fields."components": [
+                  {
+                    "self": "https://jira.action-media.ru/rest/api/2/component/10014",
+                    "id": "10014",
+                    "name": "Справочные системы"
+                  },
+                  {
+                    "self": "https://jira.action-media.ru/rest/api/2/component/10014",
+                    "id": "10014",
+                    "name": "Справочные системы"
+                  }
+                ]
+                */
+            } else {
+                notifyMessage += "<br>В инициативе не заданы компоненты";
+                Smart_log(ln+`В инициативе не заданы компоненты`);
+            }
+            // получаем название
+            if ('summary' in obj.fields && obj.fields.summary != null) {
+                current_issue_data["summary"] = obj.fields.summary;
+            } else {
+                current_issue_data["summary"] = "";
+                notifyMessage += "<br>В инициативе нет наименования"
+                Smart_log(ln+`В инициативе нет наименования`);
+            }
+            // получаем команду
+            if ('customfield_11601' in obj.fields && obj.fields.customfield_11601 != null) {
+                current_issue_data["customfield_11601"] = obj.fields.customfield_11601;
+                current_issue_data["teamCode"] = obj.fields.customfield_11601.value;
+                delete current_issue_data.customfield_11601.self;
+                delete current_issue_data.customfield_11601.value;
+                /*
+                fields."customfield_11601": {
+                  "self": "https://jira.action-media.ru/rest/api/2/customFieldOption/11830",
+                  "value": "SS",
+                  "id": "11830"
+                }
+                */
+            } else {
+                current_issue_data["teamCode"] = "";
+                notifyMessage += "<br>В инициативе не задана команда"
+                Smart_log(ln+`В инициативе не задана команда`);
+            }
+            // получаем значение поля "Добавить в"
+            if ('customfield_11610' in obj.fields && obj.fields.customfield_11610 != null) {
+                current_issue_data["customfield_11610"] = obj.fields.customfield_11610;
+                delete current_issue_data.customfield_11610.self;
+                delete current_issue_data.customfield_11610.value;
+                /*
+                fields."добавить в"
+                    "customfield_11610": {
+                      "self": "https://jira.action-media.ru/rest/api/2/customFieldOption/11851",
+                      "value": "портфель проектов",
+                      "id": "11851"
+                    }
+                */
+            } else {
+                notifyMessage += "<br>Не определен портфель проектов"
+                Smart_log(ln+`Не определен портфель проектов`);
+            }
+            // дата начала задачи
+            if ('customfield_11504' in obj.fields && obj.fields.customfield_11504 != null) {
+                current_issue_data["customfield_11504"] = obj.fields.customfield_11504; // "customfield_11504": "2020-09-28"
+            } else {
+                Smart_log(ln+`Ошибка. В инициативе отсутствует дата старта obj.fields.customfield_11504 == null`);
+            }
+            //Smart_log(ln+`Parsing complete`);
+            if (notifyMessage) {
+                AJS.flag({
+                    type: 'warning', // success, info, warning, error
+                    title: 'Внимание!',
+                    body: notifyMessage,
+                    close: "manual", //  "manual", "auto" and "never"
+                    persistent: false
+                });
+            }
+            //Smart_log(ln+`data ${JSON.stringify(current_issue_data)}`);
+        } else Smart_log(ln+`Ошибка. obj.fields == null`);
+    } else Smart_log(ln+`Ошибка. Данные не переданы на вход`);
+
+    //Smart_log(ln+`data ${JSON.stringify(current_issue_data)}`);
+
+    log_level--;
+}
+function SmartDlgDisableCreateEpic(value){
+    if (value) {
+        var createEpicCheckBox = $('#smart_can_create_epic');
+        createEpicCheckBox.prop('checked',false);
+        createEpicCheckBox.prop('disabled',true);
+        $("#smart_epic_short_name").prop('disabled',true);
+    } else {
+        $('#smart_can_create_epic').prop('disabled',false);
+         $("#smart_epic_short_name").prop('disabled',false);
+    }
+}
+function SmartDlgShow() {
+    var ln = "SmartDlgShow: ";
+    log_level++;
+    // считываем данные инициативы для дальнейшего использования
+    let url = new URL(jiraAPIGetIssue+current_issue_data.key);
+    url.searchParams.set('fields', 'summary,components,customfield_11601,customfield_11610,customfield_11504');
+    //url.searchParams.set('ABDetail', 'AB_SmartDlgShow');
+    //url.searchParams.set('CustomSource', 'AnnouncementBanner');
+    $.ajax({
+        url: url, // указываем URL
+        type: "GET", // HTTP метод, по умолчанию GET
+        data: {"AProcess": 'ABanner', 'ABProcess':'SmartDlg', 'ADetail':'GetIniciative'}, // данные, которые отправляем на сервер CustomSource=AnnouncementBanner ABDetail=AB_SmartDlgShow
+        dataType: "json", // тип данных загружаемых с сервера
+        async: false,
+        success: function (data) {
+            //Smart_log(ln+`data ${JSON.stringify(data)}`);
+            SmartDlgGetIniciativeDataFromObj(data);
+            // разблокируем кнопку создания задач
+            SmartDlgSetButtonStateDisable(false);
+            //Smart_log(ln+`Данные по инициативе ${current_issue_data.key} успешно получены`);
+        },
+        error: function(){
+            AJS.banner({
+                body: `Не удалось получить данные по задаче <strong>${current_issue_data.key}</strong>. Попробуйте перезагрузить страницу.`
+            });
+            Smart_log(`${ln} Ошибка выполнения GET запроса`);
+            Smart_log(`${ln} url: ${url}`);
+        }
+    });
+
+    // очищаем список созданых ранее задач
+    current_issue_data["newIssueList"] = []
+    // добавляем в описание код задачи
+    $("#smart-dlg-initiative-key").text(`Добавление подзадач в инициативу ${current_issue_data.key}`);
+    // блокируем кнопку до получения данных по задаче
+    // отключили async
+    //SmartDlgSetButtonStateDisable(true);
+    // скрываем прогресс бар
+    $("#smart-dialog-progress").hide();
+    // проверяем, что команда задана, иначе блокируем создание эпика
+    if (current_issue_data.teamCode.length == 0) {
+        SmartDlgDisableCreateEpic(true);
+    } else {
+        // проверяем, что у нас есть маппинг команды на код проекта
+        if (SmartDlgGetProjectByTeam(current_issue_data.teamCode).length == 0) {
+            SmartDlgDisableCreateEpic(true);
+            AJS.flag({
+                type: 'warning', // success, info, warning, error
+                title: 'Нет маппинга для команды',
+                body: "Не удалось определить проект разработки по коду команды. Создание эпика невозможно",
+                close: "manual", //  "manual", "auto" and "never"
+                persistent: false
+            });
+        } else {
+            SmartDlgDisableCreateEpic(false);
+        }
+    }
+
+    // проверяем, что диалог еще не отображался и навешиваем обработчки
+    if (current_issue_data.isSmartDlgFirst) {
+        // назначаем обработчики кнопкам диалога
+        AJS.$("#smart-dialog-cancel-button").click(function (e) {
+                e.preventDefault();
+                AJS.dialog2("#demo-dialog").hide();
+        });
+        $("#smart-dialog-create-button").click(function() { SmartDlgCreateTasks(); });
+        $("#btn_backend_add").click(function() { SmartDlgAddNewTask("backend"); });
+        $("#btn_frontend_add").click(function() { SmartDlgAddNewTask("frontend"); });
+        $("#btn_req_add").click(function() { SmartDlgAddNewTask("req"); });
+        $("#btn_test_add").click(function() { SmartDlgAddNewTask("test"); });
+        $("#btn_design_add").click(function() { SmartDlgAddNewTask("design"); });
+
+        current_issue_data.isSmartDlgFirst = false;
+    }
+    // отображаем диалог
+    AJS.dialog2("#demo-dialog").show();
+
+    log_level--;
+}
+function SmartDlgCreateTasks(){
+    var ln = "CreateSmartTasks: ";
+    log_level++;
+    // формируем массив данных для создания задач
+    var tasks_data = [];
+    // получаем все елементы с данными (кроме эпика в проекте разработки)
+    var $newTaskNameElemenst = $(".smart-task-name");
+    if ($newTaskNameElemenst.length>0) {
+        // обходим только элементы с именем задачи и уже на основе их индекса работаем с другими
+        $newTaskNameElemenst.each(function(indx){
+            var index = $(this).attr("data-smart-id");
+            var issue_type = $(this).attr("data-issue-type");
+            var task_name = $(this).val(); if (task_name.length == 0) task_name = "Имя задачи не задано";
+            var task_estimate = $(`.${issue_type} .smart-task-estimate[data-smart-id="${index}"]`).val(); if (task_estimate.length == 0) task_estimate = 0; // $newTaskEstimateElemenst.find("#input_estm_subtask_backend*").length; //$(".edit-element[smart-index2='2']").length;   [data-smart-id="${index}"]
+            //Smart_log(`${ln} index ${index} task_name ${task_name} task_estimate ${task_estimate}`);
+            tasks_data.push({"issue_type":issue_type, "task_name":task_name, "task_estimate":task_estimate, "params":{"project_type":"backlog"}});
+        });
+    }
+    // проверяем, не надо ли создать эпик в проекте разработки
+    if ($('#smart_can_create_epic').prop('checked')) {
+        var shortEpicName = $("#smart_epic_short_name").val();
+        if (shortEpicName.length == 0) shortEpicName = "Не задано";
+        tasks_data.push({"issue_type":"epic", "task_name":current_issue_data.summary, "task_estimate":0, "params":{"project_type":"develop", "epicName":shortEpicName}});
+    }
+    // если есть задачи для создания
+    if (tasks_data.length >0 ) {
+        // блокируем кнопки до завершения создания задач
+        SmartDlgSetButtonStateDisable(true);
+        // отображаем прогресс бар и устанавливаем максимум
+        var smartDlgProgress = $("#smart-dialog-progress");
+        smartDlgProgress.attr("max",tasks_data.length);
+        smartDlgProgress.attr("value",0);
+        smartDlgProgress.show();
+
+        // считываем данные инициативы для дальнейшего использования в подзадачах
+        for (let task_data of tasks_data) {
+            // создаем сабтаски в инициативе и эпик в проекте разработки
+            SmartDlgCreateTask(task_data);
+        }
+    } else {
+        AJS.flag({
+            type: 'info', // success, info, warning, error
+            title: 'Внимание!',
+            body: "Добавьте данные для создания задач",
+            close: "auto", //  "manual", "auto" and "never"
+            persistent: false
+        });
+    }
+
+    log_level--;
+}
+function SmartDlgGetProjectByTeam(value){
+    var ln = "SmartDlgGetProjectByTeam: ";
+    log_level++;
+    var result = "";
+
+    // определяем код проекта разработки Jira по коду команды
+    switch(value) {
+        case "SS": { result = "SS"; break; }
+        case "WARM": { result = "WARM"; break; }
+        case "SRCH": { result = "SRCH"; break; }
+        case "PLAT": { result = "PLAT"; break; }
+        case "SCHL": { result = "SCHL"; break; }
+        case "ESITE": { result = "ESITE"; break; }
+        case "DataPlatform": { result = "DP"; break; }
+    }
+
+    log_level--;
+    return result;
+}
+function SmartDlgCreateTask(value){
+    var ln = "CreateSmartTask: ";
+    log_level++;
+    // value: issue_type, task_name, task_estimate
+
+    var issueTypeId = "11001"
+    switch(value.issue_type) {
+        case "backend": {
+            issueTypeId = "11001";
+            break; }
+        case "frontend": {
+            issueTypeId = "11002";
+            break; }
+        case "req": {
+            issueTypeId = "11004";
+            break; }
+        case "test": {
+            issueTypeId = "11005";
+            break; }
+        case "design": {
+            issueTypeId = "11000";
+            break; }
+        case "epic": {
+            issueTypeId = "10000";
+            break; }
+    }
+
+    var newIssueData = {
+        "fields": {
+            "issuetype": {
+                "id": issueTypeId
+            },
+            "summary":value.task_name
+        }
+    };
+/*
+======================================================================================================================================================
+    TODO
+======================================================================================================================================================
+3. current_issue_data.newIssueList.push({value, data}); - объединить с tasks_data и фиксировать статусы создания задач
+4. добавить глобальную фиксацию ошибок
+5. почему то при смене команды повторно диалог не вызывается
+*/
+
+
+    /*
+// маппинг компонентов на проекты Jira
+        def componentsProjectMap = [
+"Справочные системы" : "SS",
+"Горячая линия" : "PLAT",
+"Календарь" : "PLAT",
+"Личный кабинет" : "PLAT",
+"Онлайн-помощник" : "PLAT",
+"Актион 360" : "PLAT",
+"ВебАРМ" : "WARM",
+"ЕРМ Продавца" : "ARMSEL",
+"Корпоративный портал" : "BITRIX",
+"ГИС Контроль" : "GISCONTROL",
+"Ассистент Поставщика" : "ARMPRO",
+"Ассистент Заказчика" : "ARMCLIENT",
+"Охрана Труда" : "AWFHSE",
+"Рейтинг Поставщика" : "RGC",
+"Проверка Контрагента" : "KONT",
+"Поиск" : "SRCH",
+"Правобот" : "FIRE",
+"Школы" : "SCHL",
+"Е-издания" : "ESITE",
+"DataPlatform" :"DP",
+"CRM" :"ARMAP"
+ "Маркетинговые сайты":"PRNT":"PRNT, GLAVBUKH, ERGLAV, DBAN, DIEGO, ASEH, ALEJANDRO, EJTOOL, TAGPROXY, MMT"
+"Маркетинговая платформа":"SEG":"MP, PABLO, SEG, SUBSCR"
+    		]
+    */
+
+    switch(value.params.project_type) {
+        case "develop": {
+            newIssueData.fields["project"] = {"key": SmartDlgGetProjectByTeam(current_issue_data.teamCode)};
+            newIssueData.fields["description"] = "Необходимо реализовать требования инициативы и конфлюенса";
+            //newIssueData.fields["priority"] = {"id": "10102"};
+            newIssueData.fields["customfield_10102"] = value.params.epicName;
+            break; }
+        case "backlog": {
+            newIssueData.fields["project"] = {"key": current_issue_data.projectKey};
+            newIssueData.fields["parent"] = {"key": current_issue_data.key};
+            newIssueData.fields["timetracking"] = {"originalEstimate": value.task_estimate};
+            newIssueData.fields["description"] = "Планирование активности и ресурсов";
+            if ('components' in current_issue_data && current_issue_data.components != null) newIssueData.fields["components"] = current_issue_data.components;
+            if ('customfield_11601' in current_issue_data && current_issue_data.customfield_11601 != null) newIssueData.fields["customfield_11601"] = current_issue_data.customfield_11601;
+            if ('customfield_11610' in current_issue_data && current_issue_data.customfield_11610 != null) newIssueData.fields["customfield_11610"] = current_issue_data.customfield_11610;
+            if ('customfield_11504' in current_issue_data && current_issue_data.customfield_11504 != null) newIssueData.fields["customfield_11504"] = current_issue_data.customfield_11504;
+            break; }
+    }
+
+    // создаем подзадачу
+    let url = new URL(jiraAPIPostIssue);
+    url.searchParams.set('AProcess', 'ABanner');
+    url.searchParams.set('ABProcess', 'SmartDlg');
+    url.searchParams.set('ADetail', 'CreateIssue');
+    $.ajax({
+        url: url, // указываем URL
+        type: "POST",
+        data: JSON.stringify(newIssueData), // данные, которые отправляем на сервер
+        //headers: headers,
+        //username: "",
+        //password: "",
+        contentType: "application/json; charset=utf-8",
+        //async: false,
+        //dataType: "json", // тип данных загружаемых с сервера
+        //processData: false,
+        success: function (data) {
+            //Smart_log(ln+`Результаты создания задачи`);
+            //Smart_log(ln+`data ${JSON.stringify(data)}`);
+            // Добавляем информацию по задаче
+            current_issue_data.newIssueList.push({value, data});
+        },
+        error: function(textStatus){
+            AJS.banner({
+                body: `Что-то пошло не так`
+            });
+            Smart_log(`${ln} Ошибка выполнения POST запроса`);
+            Smart_log(`${ln} url: ${url}`);
+            Smart_log(`${ln} ${JSON.stringify(textStatus)}`);
+        },
+        complete: function(){
+            // актуализируем результат
+            SmartDlgProgressControl();
+        }
+    });
+
+    /*
+{
+    "fields": {
+        "assignee": {
+            "name": "homer"
+        },
+        "reporter": {
+            "name": "smithers"
+        },
+        "priority": {
+            "id": "20000"
+        },
+        "labels": [
+            "bugfix",
+            "blitz_test"
+        ],
+        "timetracking": {
+            "originalEstimate": "10",
+            "remainingEstimate": "5"
+        },
+        "security": {
+            "id": "10000"
+        },
+        "versions": [
+            {
+                "id": "10000"
+            }
+        ],
+        "environment": "environment",
+        "description": "description",
+        "duedate": "2011-03-11",
+        "fixVersions": [
+            {
+                "id": "10001"
+            }
+        ],
+        "customfield_30000": [
+            "10000",
+            "10002"
+        ],
+        "customfield_80000": {
+            "value": "red"
+        },
+        "customfield_20000": "06/Jul/11 3:25 PM",
+        "customfield_40000": "this is a text field",
+        "customfield_70000": [
+            "jira-administrators",
+            "jira-software-users"
+        ],
+        "customfield_60000": "jira-software-users",
+        "customfield_50000": "this is a text area. big text.",
+        "customfield_10000": "09/Jun/81"
+    }
+}
+    */
+
+
+    log_level--;
+}
+function SmartDlgProgressControl(){
+    var ln = "SmartDlgProgressControl: ";
+    log_level++;
+
+    var smartDlgProgress = $("#smart-dialog-progress");
+    smartDlgProgress.attr("value",smartDlgProgress.attr("value")+1);
+
+    // если заполнили шкалу, то скрываем диалог и показываем результат
+    if (smartDlgProgress.attr("value") == smartDlgProgress.attr("max")) {
+        AJS.dialog2("#demo-dialog").hide();
+        Smart_log(ln+`data ${JSON.stringify(current_issue_data)}`);
+
+        // собираем задачки в список
+        var messageBody = '<ul>';
+        for (let task of current_issue_data.newIssueList) {
+            messageBody += `<li><a href="${jiraTaskURL}${task.data.key}">${task.data.key} (${task.value.issue_type})</a></li>`;
+        }
+
+        messageBody += "</ul>";
+
+        AJS.flag({
+            type: 'success', // success, info, warning, error
+            title: 'Задачи успешно созданы',
+            body: messageBody,
+            close: "manual", //  "manual", "auto" and "never"
+            persistent: false
+        });
+
+        // очистка данных для подготовки к следующему запуску
+        current_issue_data.newIssueList = [];
+        current_issue_data.components = [];
+        current_issue_data.summary = "";
+        current_issue_data.customfield_11601 = {};
+        current_issue_data.customfield_11610 = {};
+        current_issue_data.customfield_11504 = "";
+
+        // удаляем динамические элементы диалога
+        $(`.subtask`).remove();
+        // сбрасываем чекбокс эпика
+        $('#smart_can_create_epic').prop('checked',false);
+    }
+
+    log_level--;
+}
+function SmartDlgAddNewTask(taskType) {
+    var index = 0;
+    var preffix = '[X]';
+    switch(taskType) {
+        case "backend": {
+            backend_count++;
+            index = backend_count;
+            preffix = "[B]";
+            break; }
+        case "frontend": {
+            frontend_count++;
+            index = frontend_count;
+            preffix = "[F]";
+            break; }
+        case "req": {
+            req_count++;
+            index = req_count;
+            preffix = "[R]";
+            break; }
+        case "test": {
+            test_count++;
+            index = test_count;
+            preffix = "[T]";
+            break; }
+        case "design": {
+            design_count++;
+            index = design_count;
+            preffix = "[D]";
+            break; }
+    }
+  SmartDlgAddAnyTasks("subtask",taskType,index,`${preffix} ${current_issue_data.summary}`);
+}
+function SmartDlgAddAnyTasks(classSubtask, classSubtaskDetail, count, taskName){
+    var id_postfix = `_${classSubtask}_${classSubtaskDetail}_${count}`
+    var class_name = `${classSubtask} ${classSubtaskDetail} ${classSubtaskDetail}_${count}`
+    // определяем группу полей
+    var $fieldset = $(`#fieldset_${classSubtaskDetail}`);
+    // добавляем общий div
+    //<form class="aui">
+    var $div = $('<form>').attr({
+    'id': 'form' + id_postfix,
+    'class': class_name+" aui"
+    });
+    $fieldset.append($div);
+    // добавляем в div строку ввода имени задачи
+    $div.append( SmartDlgCreateTaskNameElement(id_postfix, class_name+" edit-element smart-task-name", `${taskName} (${count})`,count,classSubtaskDetail) );
+    // добавляем в div строку ввода оценки задачи
+    $div.append( SmartDlgCreateTaskEstimateElement(id_postfix, class_name+" edit-element smart-task-estimate", count,classSubtaskDetail) );
+    // добавляем кнопку удаления группы элементов
+    $div.append( SmartDlgCreateBtnDeleteElement(id_postfix, class_name) );
+}
+function SmartDlgCreateTaskNameElement(postfix, className, taskName, index, issueType) {
+    var $element = $('<input>').attr({
+        'id': 'input_name' + postfix,
+        'class': className+" text long-field",
+        'type': 'text',
+        'value': taskName,
+        "data-smart-id":index,
+        "data-issue-type":issueType
+    })
+    .css({
+        'margin-right':'5px'
+    });;
+  return $element;
+}
+function SmartDlgCreateTaskEstimateElement(postfix, className, index, issueType) {
+    var $element = $('<input>').attr({
+        'id': 'input_estm' + postfix,
+        'class': className+" text short-field",
+        'type': 'number',
+        'min': '0',
+        'max': '240',
+        'placeholder': 'Оценка в часах',
+        "data-smart-id":index,
+        "data-issue-type":issueType
+    })
+    .css({
+        'margin-right':'5px'
+    });
+  return $element;
+}
+function SmartDlgCreateBtnDeleteElement(postfix, className) {
+
+    var $element = $('<input>').attr({
+        id: 'btn' + postfix,
+        class: className + " btnDelete aui-button",
+        type: 'button',
+        value: 'Удалить'
+    })
+    .click(function() {
+        SmartDlgDeleteTaskElements(postfix);
+    });
+    /*var $div = $('<div>').attr({
+        'id': 'div' + postfix,
+        'class': className+" aui-buttons"
+    });
+    $div.append($element);*/
+  return $element;
+}
+function SmartDlgDeleteTaskElements(value) {
+  //alert(`${index} ${type}`);
+  $(`form#form${value}`).remove()
+}
+
+function GetIssueStates (){
+    var ln = "GetIssueStates: ";
+
+    var canIncrement = false;
+
+    // ищем блоки с активными спринтами
+    /*var activeSprintGrids = document.getElementsByClassName(activeSprintGridClass);
+    if (activeSprintGrids.length < 1) {
+        Log(ln+"Не найдены активные спринты");
+    }
+    else
+    {*/
+    //Log(ln+"Найдены активные спринты ("+activeSprintGrids.length+")");
+    // обходим активные спринты
+    //for( var activeSprintGrid, i = 0; activeSprintGrid = activeSprintGrids[i++]; ) {
+    var activeSprintGridIssues = document.getElementsByClassName(activeSprintGridIssueClass);
+    //Log(ln+"Найдено элементов в активном спринте ("+activeSprintGridIssues.length+")");
+    // обходим задачи в спринте
+    for( var activeSprintGridIssue, j = 0; activeSprintGridIssue = activeSprintGridIssues[j++]; ) {
+        var issueKey = activeSprintGridIssue.getAttribute(activeSprintGridIssueAttribute);
+        //Log(ln+"issueKey "+issueKey);
+
+        // ищем расширение информации по задаче в гриде
+        var extraFieldsParent = activeSprintGridIssue.children[0].getElementsByClassName(extraFieldsParentClass);
+        //Log(ln+"extraFieldsParent "+extraFieldsParent.length);
+        if (extraFieldsParent.length <1) {
+            //Log(ln+"Наш класс отсутствует"+extraFieldsParentClass);
+        } else
+        {
+            //Log(ln+"Наш класс на месте "+extraFieldsParentClass);
+            var extraFieldsClasses = activeSprintGridIssue.children[0].getElementsByClassName("ghx-extra-field");
+            // ищем дочерние с данными
+            if (extraFieldsClasses.length >0) {
+                var stateName;
+                // ищем статус
+                for( var extraFieldsClassChildren, k = 0; extraFieldsClassChildren = extraFieldsClasses[k++]; ) {
+                    var extraFieldAttribute = extraFieldsClassChildren.getAttribute("data-tooltip");
+                    if (extraFieldAttribute.indexOf("Status:")>=0) {
+                        stateName = extraFieldAttribute.slice(8);
+                        //Log(ln+"stateName = "+stateName);
+                        break;
+                    }
+                    Log(ln+"Атрибуты "+extraFieldAttribute);
+                }
+                // если нашли статус
+                if (stateName) {
+                    // ищем кастомный класс со статусом
+                    var stateCustomClasses = activeSprintGridIssue.children[0].children[1].getElementsByClassName(stateCustomClass);
+                    if (stateCustomClasses.length >=1) {
+                        // статус мы уже добавили
+                        // хорошо бы обновлять статус
+                    } else
+                    {
+                        // есть задачи без fix version и epic, у них другая структура классов
+                        // надо в ghx-issue-content
+                        // создать ghx-end ghx-row ghx-row-version-epic-subtasks
+                        // и переместить туда ghx-end ghx-extra-field-estimate
+                        //
+                        // статус еще не добавляли, делаем
+                        var e = document.createElement('span');
+                        e.className = "aui-label ghx-label ghx-label-double ghx-label-4 "+stateCustomClass;
+                        e.innerHTML = stateName;
+                        e.style.marginLeft = "10px";
+
+                        var extraEpicPanel = activeSprintGridIssue.children[0].getElementsByClassName(extraEpicPanelClass);
+                        //Log(ln+"epicPanel.length "+extraEpicPanel.length);
+                        if (extraEpicPanel.length > 0) {
+                            activeSprintGridIssue.children[0].children[1].appendChild(e);
+                        } else{
+                            var newPanel = document.createElement('div');
+                            newPanel.className = "ghx-row-version-epic-subtasks";
+                            //newPanel.innerHTML = stateName;
+                            newPanel.style.display = "inline";
+                            activeSprintGridIssue.children[0].appendChild(newPanel);
+                            //
+                            var extraFieldEstimate = activeSprintGridIssue.children[0].children[1].getElementsByClassName(extraFieldEstimateClass);
+                            extraFieldEstimate[0].style.display = "inline";
+                            newPanel.append(extraFieldEstimate[0]);
+
+                            activeSprintGridIssue.children[0].children[2].children[0].appendChild(e);
+                        }
+                        canIncrement = true;
+                    }
+                }
+            }
+        }
+    }
+    //}
+    //}
+    if (canIncrement) countUpdate++;
+    refreshStopped = false;
+}
+function GetFirstFutureSprintByHtmlAsElement(){
+    var ln = "GetFirstFutureSprintByHtmlAsElement: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    var result = null;
+    var elFutureSprints = document.getElementsByClassName("ghx-backlog-container ghx-sprint-planned js-sprint-container");
+    if (elFutureSprints !== null && elFutureSprints.length>0) {
+        result = elFutureSprints[0];
+    } else Smart_log(ln+"Будущий спринт не найден 2");
+
+    const end = new Date().getTime();
+    Smart_log(ln+`Время работы: ${end - start} мс`);
+    log_level--;
+
+    return result;
+}
+function GetIssueTimetracking(issueKey){
+    log_level++;
+    var ln = "GetIssueTimetracking: ";
+
+    var result;
+    //Smart_log(ln+JIRA.Issue.getIssueKey());
+    //Smart_log(ln+AJS.Meta.get("issue-key"));
+
+    let url = new URL(jiraURL+"/rest/adweb/2/timetracking/"+issueKey); // "/rest/api/2/issue/"
+    url.searchParams.set('fields', 'description');
+    url.searchParams.set('CustomSource', 'AB_GetIssueTimetracking');
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url, false);
+    //xhr.setRequestHeader('SOAPAction', 'AnnouncementBanner');
+
+    xhr.send();
+    //document.getElementById("customfield_10800").value = obj.badges[1].id;
+    //Smart_log(ln+xhr.status); // Равен кодам HTTP (200 - успешно, 404 не найдено, 301 - перенесено навсегда)
+    //Smart_log(ln+xhr.statusText);
+    //Smart_log(ln+xhr.responseText);
+
+    // 4. Этот код сработает после того, как мы получим ответ сервера
+    //xhr.onload = function() { // только для асинхронки
+    if (xhr.status != 200) { // анализируем HTTP-статус ответа, если статус не 200, то произошла ошибка
+        //Smart_log(ln+`Ошибка ${xhr.status}: ${xhr.statusText}`);
+    } else { // если всё прошло гладко, выводим результат
+        //Smart_log(ln+`Готово, получили ${xhr.response.length/1024} Kбайт`);
+        result = xhr.responseText;
+    }
+    //};
+
+    log_level--;
+    return result;
+}
+function GetIssue(issueKey){
+    log_level++;
+    var ln = "GetIssue: ";
+
+    var result;
+    //Smart_log(ln+JIRA.Issue.getIssueKey());
+    //Smart_log(ln+AJS.Meta.get("issue-key"));
+
+    let url = new URL(jiraURL+"/rest/api/2/issue/"+issueKey);
+    url.searchParams.set('fields', 'assignee');
+    url.searchParams.set('CustomSource', 'AB_GetIssue'); // CustomSource=AnnouncementBanner CustomSource=AB_GetIssueTimetracking CustomSource=AB_GetIssue
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", url, false);
+    //xhr.setRequestHeader('SOAPAction', 'AnnouncementBanner');
+
+
+    xhr.send();
+    //document.getElementById("customfield_10800").value = obj.badges[1].id;
+    //Smart_log(ln+xhr.status); // Равен кодам HTTP (200 - успешно, 404 не найдено, 301 - перенесено навсегда)
+    //Smart_log(ln+xhr.statusText);
+    //Smart_log(ln+xhr.responseText);
+
+    // 4. Этот код сработает после того, как мы получим ответ сервера
+    //xhr.onload = function() { // только для асинхронки
+    if (xhr.status != 200) { // анализируем HTTP-статус ответа, если статус не 200, то произошла ошибка
+        //Smart_log(ln+`Ошибка ${xhr.status}: ${xhr.statusText}`);
+    } else { // если всё прошло гладко, выводим результат
+        //Smart_log(ln+`Готово, получили ${xhr.response.length/1024} Kбайт`);
+        result = xhr.responseText;
+    }
+    //};
+
+    log_level--;
+    return result;
+}
+function GetProjectByURL(){
+    log_level++;
+
+    var ln = "GetProjectByURL ";
+    var projectCode = ""
+    // https://jira.action-media.ru/browse/SS-7549
+    // убеждаемся, что открыта задача
+    if ( window.location.href.includes(jiraTaskURL) ) {
+        var lineIndex = window.location.href.indexOf("-",jiraTaskURL.length)
+        projectCode = window.location.href.substring(jiraTaskURL.length,lineIndex);
+        Smart_log(ln+"projectCode = "+projectCode);
+    } else Smart_log(ln+"URL "+window.location+" не совпадает с паттерном задачи "+jiraTaskURL);
+
+    log_level--;
+    return projectCode;
+}
+function UpdateEpicInfoSmart(){
+    var ln = "UpdateEpicInfoSmart: ";
+    log_level++;
+
+    var epicKey = JIRA.Issue.getIssueKey();
+
+    var epicTaskListElemSpan = document.getElementById(epicTaskListElemSpanId);
+    if (epicTaskListElemSpan) {
+        epicTaskListElemSpan.style.backgroundColor = "#FF7A83"
+    }
+    var tDelay = 0; setTimeout(UpdateEpicInfoSmartEnd, tDelay, epicKey);
+
+    log_level--;
+}
+function UpdateEpicInfoSmartEnd(epicKey){
+    var ln = "UpdateEpicInfoSmartEnd: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    var epicTable = document.getElementById("ghx-issues-in-epic-table");
+    if (epicTable == null) { Smart_log(ln+"Не нашли epicTable в документе")
+    } else {
+        if (epicTable.rows.length < 1) { Smart_log(ln+"В эпике нет задач")
+        } else {
+            //var epicTasks = [];
+            var estimateDevSummary = 0;
+            var estimateQASummary = 0;
+
+            // обходим таблицу задач и получаем трудозатраты по ролям
+            for(var i=0; i<epicTable.rows.length; i++) {
+                if (epicTable.rows[i].id != epicTableNewRowHeaderId && epicTable.rows[i].id != epicTableNewRowBottomId) {
+                    var issueKey = epicTable.rows[i].getAttribute("data-issuekey");
+                    var epicTaskInfo = {
+                        issueKey:issueKey,
+                        elIssueId:'elIssueId'+issueKey.replace('-',''),
+                        roles :[{key:"Developers", estimate:0},{key:"QA", estimate:0}]
+                    }
+                    var objIssueTimetracking = JSON.parse(GetIssueTimetracking(issueKey));
+                    if (objIssueTimetracking) {
+                        //Smart_log(`${ln} objIssueTimetracking = ${JSON.stringify(objIssueTimetracking)}`);
+                        if ('estimates' in objIssueTimetracking) {
+                            if (objIssueTimetracking.estimates.length > 0) {
+                                // обходим имеющиеся оценки
+                                for(var r=0; r<objIssueTimetracking.estimates.length; r++) {
+                                    for(var ro=0; ro<epicTaskInfo.roles.length; ro++) {
+                                        //Smart_log(ln+` ${epicTaskInfo.issueKey} ${objIssueTimetracking.estimates[r].role} ${epicTaskInfo.roles[ro].key}`);
+                                        if (objIssueTimetracking.estimates[r].role == epicTaskInfo.roles[ro].key)
+                                        {
+                                            if ("remainingEstimateSeconds" in objIssueTimetracking.estimates[r]) { // originalEstimateSeconds
+                                                var estimate = objIssueTimetracking.estimates[r].remainingEstimateSeconds/60/60;
+                                                var templateValue = +estimate.toFixed(1);
+                                                epicTaskInfo.roles[ro].estimate = templateValue;
+
+                                                switch(epicTaskInfo.roles[ro].key) {
+                                                    case "Developers": {
+                                                        estimateDevSummary+=objIssueTimetracking.estimates[r].remainingEstimateSeconds;
+                                                        break;
+                                                    }
+                                                    case "QA": {
+                                                        estimateQASummary+=objIssueTimetracking.estimates[r].remainingEstimateSeconds;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else Smart_log(ln+`отсутствуют данные objIssueTimetracking`);
+                        } else Smart_log(ln+`отсутствуют данные estimates (issueKey=${objIssueTimetracking.key})`);
+                    } else Smart_log(ln+`GetIssueTimetracking - данные не были получены (issueKey=${issueKey})`);
+                    //epicTasks.push(epicTaskInfo);
+                    var newCellDev = document.getElementById('newCellDev'+epicTaskInfo.elIssueId);
+                    if (newCellDev) {
+                         newCellDev.innerHTML = epicTaskInfo.roles[0].estimate;
+                    } else {
+                        newCellDev = epicTable.rows[i].insertCell(-1);
+                        newCellDev.className ='nav ghx-minimal';
+                        newCellDev.id='newCellDev'+epicTaskInfo.elIssueId;
+                        newCellDev.innerHTML = epicTaskInfo.roles[0].estimate;
+                    }
+
+                    var newCellQA = document.getElementById('newCellQA'+epicTaskInfo.elIssueId);
+                    if (newCellQA) {
+                         newCellQA.innerHTML = epicTaskInfo.roles[1].estimate;
+                    } else {
+                        newCellQA = epicTable.rows[i].insertCell(-1);
+                        newCellQA.className ='nav ghx-minimal';
+                        newCellQA.id='newCellQA'+epicTaskInfo.elIssueId;
+                        newCellQA.innerHTML = epicTaskInfo.roles[1].estimate;
+                    }
+                }
+            }
+            // добавляем шапку
+            var elNewRowHeader = document.getElementById(epicTableNewRowHeaderId);
+            if (!elNewRowHeader) {
+                var newRowHeader = epicTable.insertRow(0);
+                newRowHeader.id = epicTableNewRowHeaderId;
+                var newRowHeaderCell = newRowHeader.insertCell(0); newRowHeaderCell.innerHTML = 'V';
+                newRowHeaderCell = newRowHeader.insertCell(1); newRowHeaderCell.innerHTML = 'Key';
+                newRowHeaderCell = newRowHeader.insertCell(2); newRowHeaderCell.innerHTML = 'Summary';
+                newRowHeaderCell = newRowHeader.insertCell(3); newRowHeaderCell.innerHTML = 'Type';
+                newRowHeaderCell = newRowHeader.insertCell(4); newRowHeaderCell.innerHTML = 'State';
+                newRowHeaderCell = newRowHeader.insertCell(5); newRowHeaderCell.innerHTML = 'Assignee';
+                newRowHeaderCell = newRowHeader.insertCell(6); newRowHeaderCell.innerHTML = 'A';
+                newRowHeaderCell = newRowHeader.insertCell(7); newRowHeaderCell.innerHTML = 'Dev';
+                newRowHeaderCell = newRowHeader.insertCell(8); newRowHeaderCell.innerHTML = 'QA';
+            }
+
+            // добавляем футер
+            var elNewRowBottom = document.getElementById(epicTableNewRowBottomId);
+            if (!elNewRowBottom) {
+                var newRowBottom = epicTable.insertRow(-1);
+                newRowBottom.id = epicTableNewRowBottomId;
+                var newRowBottomCell = newRowBottom.insertCell(0); newRowBottomCell.innerHTML = '';
+                newRowBottomCell = newRowBottom.insertCell(1); newRowBottomCell.innerHTML = '';
+                newRowBottomCell = newRowBottom.insertCell(2); newRowBottomCell.innerHTML = '';
+                newRowBottomCell = newRowBottom.insertCell(3); newRowBottomCell.innerHTML = '';
+                newRowBottomCell = newRowBottom.insertCell(4); newRowBottomCell.innerHTML = '';
+                newRowBottomCell = newRowBottom.insertCell(5); newRowBottomCell.innerHTML = '';
+                newRowBottomCell = newRowBottom.insertCell(6); newRowBottomCell.innerHTML = '';
+                newRowBottomCell = newRowBottom.insertCell(7); newRowBottomCell.innerHTML = (estimateDevSummary/60/60).toFixed(1);
+                newRowBottomCell = newRowBottom.insertCell(8); newRowBottomCell.innerHTML = (estimateQASummary/60/60).toFixed(1);
+            } else {
+                elNewRowBottom.cells[7].innerHTML = (estimateDevSummary/60/60).toFixed(1);
+                elNewRowBottom.cells[8].innerHTML = (estimateQASummary/60/60).toFixed(1);
+            }
+        }
+    }
+
+    var epicTaskListElemSpan = document.getElementById(epicTaskListElemSpanId);
+    if (epicTaskListElemSpan) {
+        epicTaskListElemSpan.style.backgroundColor = "white"
+    }
+
+    const end = new Date().getTime();
+    Smart_log(`${ln} Время работы: ${end - start} мс`);
+    log_level--;
+}
+function AddEpicTaskListButtonCalc(){
+    var ln = "AddEpicTaskListButtonCalc: ";
+    log_level++;
+
+    var epicPanel = document.getElementById("greenhopper-epics-issue-web-panel");
+    if (epicPanel == null) { Smart_log(ln+"Не нашли epicPanel в документе")
+    } else {
+        var epicPanelHeader = document.getElementById("greenhopper-epics-issue-web-panel_heading");
+        if (epicPanelHeader == null) {Smart_log(ln+"Не нашли epicPanelHeader в документе")
+        } else {
+            var epicTaskList = epicPanelHeader.querySelector('ul');
+            if (epicTaskList == null) {Smart_log(ln+"Не нашли epicTaskList в документе")
+            } else {
+                // создаем кнопку
+                let epicTaskListElemSpan = document.createElement('span');
+                epicTaskListElemSpan.id = epicTaskListElemSpanId;
+                epicTaskListElemSpan.classList.add('aui-icon', 'aui-icon-small', 'aui-iconfont-time');
+                epicTaskListElemSpan.onclick = UpdateEpicInfoSmart;
+
+                // добавляем кнопку в список
+                let epicTaskListElem = document.createElement('li');
+                epicTaskListElem.append(epicTaskListElemSpan);// = '<span class="aui-icon aui-icon-small aui-iconfont-time"></span>';
+                epicTaskList.append(epicTaskListElem);
+            }
+        }
+    }
+
+    log_level--;
+}
+/*
+function UpdateEpicInfo(){
+    log_level++;
+    var ln = "UpdateEpicInfo:";
+
+    Smart_log(ln+"Запускаем обогащение эпика");
+
+    var canChangeEpicInfo = false;
+    var projectCode = GetProjectByURL();
+
+    switch(projectCode) {
+        case 'SS': { canChangeEpicInfo = true; break; } // GISCONTROL
+        case 'SCHL': { canChangeEpicInfo = true; break; }
+        case 'ESITE': { canChangeEpicInfo = true; break; }
+        case 'SRCH': { canChangeEpicInfo = true; break; }
+        case 'GISCONTROL': { canChangeEpicInfo = true; break; }
+        case 'PRD': { canChangeEpicInfo = true; break; }
+        case 'ARMCLIENT': { canChangeEpicInfo = true; break; }
+        case 'AWFHSE': { canChangeEpicInfo = true; break; }
+        case 'KONT': { canChangeEpicInfo = true; break; }
+        case 'ARMPRO': { canChangeEpicInfo = true; break; }
+        case 'WARM': { canChangeEpicInfo = true; break; }
+    }
+
+    if (canChangeEpicInfo) {
+        var epicTable = document.getElementById("ghx-issues-in-epic-table");
+        if (epicTable == null) { Smart_log(ln+"Не нашли epicTable в документе");
+                               } else {
+                                   Smart_log(ln+"Строк в таблице "+epicTable.rows.length);
+                                   if (epicTable.rows.length > 0) {
+                                       for(var i=0; i<epicTable.rows.length; i++) {
+                                           var issueKey = epicTable.rows[i].getAttribute("data-issuekey");
+                                           var newCell = epicTable.rows[i].insertCell(-1);
+
+                                           var remainingEstimate = "n/a"
+
+                                           //Smart_log(ln+" "+epicTable.rows[i].cells[2].innerHTML);
+                                           //Smart_log(ln+"issueKey "+issueKey);
+                                           //if (i==0) {
+                                           // запрашиваем данные по задаче
+                                           var obj = JSON.parse(GetIssueTimetracking(issueKey));
+                                           if (obj) {
+                                               // проверяем наличие данных по ролям
+                                               if ('estimates' in obj) {
+                                                   if (obj.estimates.length > 0) {
+                                                       for(var r=0; r<obj.estimates.length; r++) {
+                                                           if (obj.estimates[r].role == "Developers") {
+                                                               if ("remainingEstimate" in obj.estimates[r]) remainingEstimate = obj.estimates[r].remainingEstimate;
+                                                               //Smart_log(ln+"obj.estimates[r].remainingEstimate = "+obj.estimates[r].remainingEstimate);
+                                                           }
+                                                       }
+                                                   }
+                                                   //Smart_log(ln+"obj.estimates.length = "+obj.estimates.length);
+                                               }// else Smart_log(ln+"obj.estimates нет в данных");
+
+                                           }
+                                           //}
+                                           newCell.className ='nav ghx-minimal';
+                                           newCell.innerHTML = remainingEstimate;
+                                       }
+                                   }
+                               }
+    }
+
+    log_level--;
+}*/
+
+
+/*
+    А. спринты: с понедельника по четверг
+    1. получаем информацию по всем задачам активного спринта в статусах OPEN, IN PROGRESS, SUSPEND, REOPENED
+    2. суммируем оставшееся по роли время по Assigne
+    3. считаем рабочие часы до конца спринта
+    4. отображаем оставшиеся часы на разработку и признак наличия проблемы с часами на работу
+
+    Б. планирование времени
+    ...
+
+    var roleInfo = {
+                                key:role.key,
+                                estimate:0,
+                                unnassigneeDev:0,
+                                dataFilterId:role.dataFilterId
+                            }
+    */
+function UpdateEstimateInfoByRole(rolesEstimates) {
+    var ln = "UpdateEstimateInfoByRole: ";
+    log_level++;
+
+    if ( rolesEstimates.length > 0 ) {
+        // выводим оценки на панель в рамках социальной ответственности
+        for (let roleEstimate of rolesEstimates) {
+            var estimate = (roleEstimate.estimate > 0) ? (roleEstimate.estimate/60/60).toFixed(0) : "0";
+            var templateValue = "";
+            switch(roleEstimate.key) {
+                    case "QA": {
+                        templateValue = estimate;
+                        break; }
+                    case "Developers": {
+                        var estimateUnnassigneeDev = (roleEstimate.unnassigneeDev > 0) ? (roleEstimate.unnassigneeDev/60/60).toFixed(0) : "0";
+                        templateValue = `${estimate}/${estimateUnnassigneeDev}`;
+                        break; }
+            }
+            var color = "black";
+            //if (estimate > 25) color = "red";
+            //Smart_log(`${ln} roleEstimate.key = ${roleEstimate.key},roleEstimate.estimate = ${roleEstimate.estimate},roleEstimate.unnassigneeDev = ${roleEstimate.unnassigneeDev}`);
+            SetElementEstimateInfoByDeveloper(roleEstimate.dataFilterId,templateValue, color,"");
+        }
+    }
+    log_level--;
+}
+function SetElementEstimateInfoByDeveloper(elParentAttr,value,color, bgColor){
+    var ln = "SetElementEstimateInfoByDeveloper: ";
+    log_level++;
+    var elParent = document.querySelector(`[data-filter-id="${elParentAttr}"]`);
+    //Smart_log(ln+`[data-filter-id=${elem_attribyte_value}]`);
+    if (elParent) {
+        var templateDIVId = `div${elParentAttr}`;
+        var elCustomEstimation = document.getElementById(templateDIVId);
+        if (elCustomEstimation === null) {
+            elCustomEstimation = document.createElement('div');
+            elCustomEstimation.id = templateDIVId;
+            elCustomEstimation.innerHTML = value;
+            //elCustomEstimation.style.display = "inline";
+            elCustomEstimation.style.border = "1px solid black";
+            elCustomEstimation.style.marginTop = "5px"
+            elCustomEstimation.style.padding = "5px"
+            elCustomEstimation.style.color = "black"
+            //elCustomEstimation.style.backgroundColor = bgColor;
+            elParent.appendChild(elCustomEstimation);
+        } else {
+            elCustomEstimation.innerHTML = value;
+
+        }
+        elCustomEstimation.style.color = color;
+        elCustomEstimation.style.backgroundColor = bgColor;
+    } else {
+        Smart_log(ln+`Элемент [data-filter-id="${elParentAttr}"] не найден`);
+    }
+    log_level--;
+}
+function UpdateEstimateInfoByDeveloper(developersEstimates) {
+    var ln = "UpdateEstimateInfoByDeveloper: ";
+    log_level++;
+    //const start= performance.now();//new Date().getTime();
+
+    if ( developersEstimates.length > 0 ) {
+        // выводим оценки на панель в рамках социальной ответственности
+        for (let developerEstimate of developersEstimates) {
+            var estimate = developerEstimate.estimate/60/60;
+            var templateValue = estimate.toFixed(1);
+            var color = "black";
+            var bgColor = "";
+            // если превышено доступное время
+            if (estimate > 25) color = "red";
+            // если есть задачи без оценки
+            if (developerEstimate.hasTaskWithoutEstimate) bgColor = "yellow";
+
+            SetElementEstimateInfoByDeveloper(developerEstimate.dataFilterId,templateValue, color,bgColor);
+        }
+    }
+    log_level--;
+}
+// устарела, но выкинуть пока жалко
+function ShowEstimateInFutureSprint(){
+    var ln = "ShowEstimateInFutureSprint: ";
+    log_level++;
+    const start= new Date().getTime();
+
+    Smart_log(ln+"Старт");
+
+    let futureSprintTasks = [];
+    var elFutureSprints, elFutureSprint;
+
+
+    // получить спринт и сохранить его, в дальнейшем проверять наличие
+    // получить список фильтров и сохранить, в дальнейшем проверять наличие
+    // пробежаться по дереву компонентов, определить список задач
+    // новые задачи добавить в массив и запросить по ним данные
+    // обновить фильтры
+
+    elFutureSprint = GetFutureSprintByHtmlAsElement();
+
+    if (elFutureSprint != null) {
+        var elFutureSprintTasks = elFutureSprint.getElementsByClassName("js-issue");
+        Smart_log(ln+"Найдено элементов elFutureSprintTasks = "+elFutureSprintTasks.length);
+        //Smart_log(ln+"Найдено элементов futureSprintTasks = "+futureSprintTasks.length);
+        if (elFutureSprintTasks.length > 0) {
+            for(var i=0; i<elFutureSprintTasks.length; i++) {
+                var key = elFutureSprintTasks[i].getAttribute("data-issue-key");
+                //Smart_log(ln+"Найдено элементов data-issue-key = "+ key);
+
+                let issueFind = futureSprintTasks.find(issue => issue.issueKey === key)
+                if (!!!issueFind) {
+                    var sprintTaskInfo = {
+                        issueKey:key,
+                        assignee:'',
+                        remainingEstimate:0,
+                        isNewTask: true
+                    }
+                    // добавляем новую задачу будущего спринта в массив
+                    futureSprintTasks.push(sprintTaskInfo);
+                    //Smart_log(ln+"нет в массиве");
+                } //else Smart_log(ln+"есть в массиве");
+            }
+            if (futureSprintTasks.length>0) {
+                // получаем новые задачи, по которым нужно запросить данные
+                var futureSprintTasksFiltered = futureSprintTasks.filter(issue => issue.isNewTask === true)
+                if (!!!futureSprintTasksFiltered) { Smart_log(ln+"массив futureSprintTasksFiltered не создан"); }
+                else {
+                    Smart_log(ln+"futureSprintTasksFiltered.length = "+futureSprintTasksFiltered.length);
+                    for (let newTask of futureSprintTasksFiltered) {
+                        var hasAssignee = false;
+                        var hasEstimaton = false;
+
+                        var obj = JSON.parse(GetIssue(newTask.issueKey));
+                        if (obj) {
+                            // проверяем наличие данных по ролям
+                            if ('fields' in obj) {
+                                if ('assignee' in obj.fields && obj.fields.assignee != null) {
+                                    if ("key" in obj.fields.assignee) {
+                                        Smart_log(ln+"assignee.displayName = "+obj.fields.assignee.displayName +` (issueKey=${obj.key})`);
+                                        newTask.assignee = obj.fields.assignee.key;
+                                        hasAssignee = true;
+                                    }
+                                } else Smart_log(ln+`отсутствуют данные assignee (issueKey=${obj.key})`);
+                            } else Smart_log(ln+`отсутствуют данные fields (issueKey=${obj.key})`);
+                        } else Smart_log(ln+`GetIssue - данные не были получены (issueKey=${newTask.issueKey})`);
+
+                        obj = null;
+                        obj = JSON.parse(GetIssueTimetracking(newTask.issueKey));
+                        if (obj) {
+                            if ('estimates' in obj) {
+                                if (obj.estimates.length > 0) {
+                                    for(var r=0; r<obj.estimates.length; r++) {
+                                        if (obj.estimates[r].role == "Developers") {
+                                            if ("remainingEstimate" in obj.estimates[r]) {
+                                                newTask.remainingEstimate = obj.estimates[r].remainingEstimateSeconds;
+                                                Smart_log(ln+"obj.estimates[r].remainingEstimate = "+obj.estimates[r].remainingEstimate);
+                                                hasEstimaton = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else Smart_log(ln+`отсутствуют данные estimates (issueKey=${obj.key})`);
+                        } else Smart_log(ln+`GetIssueTimetracking - данные не были получены (issueKey=${newTask.issueKey})`);
+
+                        if (hasAssignee && hasEstimaton) {
+                            newTask.isNewTask = false;
+                        }
+
+                    }
+                }
+
+                var developers = [{family:'Красноштанов',key:'krasnoshtanov',estimate:0,dataFilterId:582},{family:'Шилов',key:'shilov',estimate:0,dataFilterId:0},
+                                  {family:'Аленин',key:'alenin',estimate:0,dataFilterId:1888},
+                                  {family:'Гринштейн',key:'grinshtein',estimate:0,dataFilterId:2052},
+                                  {family:'Лукавенко',key:'lukavenko',estimate:0,dataFilterId:2414},
+                                  {family:'Кабоев',key:'kaboev',estimate:0,dataFilterId:2497},
+                                  {family:'Калашников',key:'a.kalashnikov',estimate:0,dataFilterId:2050},
+                                  {family:'Черкасов',key:'cherkasov',estimate:0,dataFilterId:2379},
+                                  {family:'Мартынов',key:'martynov',estimate:0,dataFilterId:2679},
+                                  {family:'Корончик',key:'koronchik',estimate:0,dataFilterId:2051}]
+                for (let x of developers) {
+                    var assigneeTasksFiltered = futureSprintTasks.filter(issue => issue.assignee === x.key)
+                    if (!!assigneeTasksFiltered && assigneeTasksFiltered.length>0) {
+                        //Smart_log(ln+`найдено задач: ${assigneeTasksFiltered.length}`);
+                        for (let task of assigneeTasksFiltered) {
+                            x.estimate+=task.remainingEstimate;
+                        }
+                    }
+                    Smart_log(ln+`Developer ${x.family} (${x.key}), задач на ${x.estimate/60/60} ч.`);
+                    UpdateEstimateInfoByDeveloper(x); // {family:'Красноштанов',key:'krasnoshtanov',estimate:0,dataFilterId:582}
+                }
+            }
+        }
+    }
+
+
+    const end = new Date().getTime();
+    Smart_log(ln+`Время работы: ${end - start} мс`);
+    log_level--;
+}
+
+function FajaxComplete(){
+    if (canUseScriptForUpdateStates) {
+        if (!refreshStopped) {
+            setTimeout(GetIssueStates, 200);
+            refreshStopped = true;
+        }
+    }
+}
+
+//AJS.$(document).ajaxSuccess(FajaxSuccess);
+AJS.$(document).ajaxComplete(FajaxComplete);
+
+
+})(AJS.$);
