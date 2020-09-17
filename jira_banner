@@ -8,6 +8,7 @@ var jiraTaskURL = "https://jira.action-media.ru/browse/"
 var jiraURL = "https://jira.action-media.ru"
 var jiraAPIGetIssue = jiraURL+"/rest/api/2/issue/"
 var jiraAPIPostIssue = jiraURL+"/rest/api/2/issue/"
+var jiraAPIPostIssueLink = jiraURL+"/rest/api/2/issueLink/"
 
 var backlogGridClass = "ghx-backlog-group";
 var activeSprintGridClass = "ghx-sprint-active";
@@ -872,6 +873,13 @@ function SmartDlgGetProjectByTeam(value){
         case "SCHL": { result = "SCHL"; break; }
         case "ESITE": { result = "ESITE"; break; }
         case "DataPlatform": { result = "DP"; break; }
+        case "ERM": { result = "ARMSEL"; break; }
+        case "ARM": { result = "ARMAP"; break; }
+        case "SERVICE": { result = "FIRE"; break; }
+        case "PRNT": { result = "PRNT"; break; }
+        case "SEG": { result = "MP"; break; }
+        case "PERM": { result = "KONT"; break; }
+        case "XSUD": { result = "XSUD"; break; }
     }
 
     log_level--;
@@ -880,7 +888,6 @@ function SmartDlgGetProjectByTeam(value){
 function SmartDlgCreateTask(value){
     var ln = "CreateSmartTask: ";
     log_level++;
-    // value: issue_type, task_name, task_estimate
 
     var issueTypeId = "11001"
     switch(value.issue_type) {
@@ -916,12 +923,8 @@ function SmartDlgCreateTask(value){
 ======================================================================================================================================================
     TODO
 ======================================================================================================================================================
-3. current_issue_data.newIssueList.push({value, data}); - объединить с tasks_data и фиксировать статусы создания задач
-4. добавить глобальную фиксацию ошибок
 5. почему то при смене команды повторно диалог не вызывается
 */
-
-
     /*
 // маппинг компонентов на проекты Jira
         def componentsProjectMap = [
@@ -991,6 +994,31 @@ function SmartDlgCreateTask(value){
             //Smart_log(ln+`data ${JSON.stringify(data)}`);
             // Добавляем информацию по задаче
             current_issue_data.newIssueList.push({value, data});
+
+            // если успешно создали эпик, то надо его связать с инициативой
+            // напрашивается использование промисов, но не в этот раз
+            if (value.params.project_type == "develop") {
+                var ajaxData = {};
+                var searchParams = [];
+                searchParams.push({"key":"AProcess", "value":"ABanner"});
+                searchParams.push({"key":"ABProcess", "value":"SmartDlg"});
+                searchParams.push({"key":"ADetail", "value":"CreateIssueLink"});
+                var ajaxDataBody = {
+                    "type": {
+                        "name": "Developes"
+                    },
+                    "inwardIssue": {
+                        "key": current_issue_data.key
+                    },
+                    "outwardIssue": {
+                        "key": data.key
+                    }
+                };
+
+                ajaxData["searchParams"] = searchParams;
+                ajaxData["ajaxDataBody"] = ajaxDataBody;
+                UCreateIssueLink(ajaxData);
+            }
         },
         error: function(textStatus){
             AJS.banner({
@@ -1005,7 +1033,6 @@ function SmartDlgCreateTask(value){
             SmartDlgProgressControl();
         }
     });
-
     /*
 {
     "fields": {
@@ -1061,7 +1088,43 @@ function SmartDlgCreateTask(value){
     }
 }
     */
+    log_level--;
+}
+function UCreateIssueLink(value){
+    var ln = "UCreateIssueLink: ";
+    log_level++;
 
+    let url = new URL(jiraAPIPostIssueLink);
+    // добавляем параметры запроса, в том числе для идентификации в елке
+    if (value.searchParams.length > 0) {
+        for (let x of value.searchParams) {
+            url.searchParams.set(x.key, x.value);
+        }
+    }
+
+    $.ajax({
+        url: url, // указываем URL
+        type: "POST",
+        data: JSON.stringify(value.ajaxDataBody), // данные, которые отправляем на сервер
+        contentType: "application/json; charset=utf-8",
+        //async: false,
+        success: function (data) {
+        },
+        error: function(textStatus){
+            AJS.flag({
+                type: 'error', // success, info, warning, error
+                title: 'Не удаось связать эпик с инициативой',
+                body: "",
+                close: "auto", //  "manual", "auto" and "never"
+                persistent: false
+            });
+            Smart_log(`${ln} Ошибка выполнения POST запроса. Не удаось связать эпик с инициативой`);
+            Smart_log(`${ln} url: ${url}`);
+            Smart_log(`${ln} ${JSON.stringify(textStatus)}`);
+        },
+        complete: function(){
+        }
+    });
 
     log_level--;
 }
@@ -1087,7 +1150,7 @@ function SmartDlgProgressControl(){
 
         AJS.flag({
             type: 'success', // success, info, warning, error
-            title: 'Задачи успешно созданы',
+            title: 'Успешно созданы задачи',
             body: messageBody,
             close: "manual", //  "manual", "auto" and "never"
             persistent: false
