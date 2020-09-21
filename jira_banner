@@ -1,3 +1,6 @@
+(function ($) {
+// Автор: Михальский Станислав, 2019-2020
+
 var script_version = '1.5'
 var devName = "_"
 
@@ -527,6 +530,16 @@ function DOMContentLoaded(){
     // добавляем кнопку на эпик для получения оценки по задачам
     tDelay = 500; setTimeout(AddEpicTaskListButtonCalc, tDelay); Smart_log(ln+`Запуск setTimeout(AddEpicTaskListButtonCalc, ${tDelay})`);
 
+    // Ждем загрузки кнопки для выхова смарт диалога и вешаем на нее евент
+    tDelay = 1000; setTimeout(AddEventToSmartButton, tDelay); Smart_log(ln+`Запуск setTimeout(AddEventToSmartButton, ${tDelay})`);
+
+    const end = new Date().getTime();
+    Smart_log(ln+`Время работы: ${end - start} мс`);
+    log_level--;
+}
+function AddEventToSmartButton(){
+    var ln = "AddEventToSmartButton: ";
+    log_level++;
     // вешаем событие на кнопку создания СМАРТ задач в инициативе
     var $issueSmartButton = $('#bcklg-tools-menu-sub-tasks_v3')
     if ($issueSmartButton.length) {
@@ -536,12 +549,8 @@ function DOMContentLoaded(){
             SmartDlgShow();
         });
     } else Smart_log(ln+"Кнопка $issueSmartButton не найдена");
-
-    const end = new Date().getTime();
-    Smart_log(ln+`Время работы: ${end - start} мс`);
-    log_level--;
+     log_level--;
 }
-
 function AddBodyHTML(){
     var ln = "AddBodyHTML: ";
     log_level++;
@@ -598,7 +607,7 @@ function AddBodyHTML(){
 
 <style>
 .demo-dialog-smart {
-   width: 800px;
+   width: 900px;
 }
 
 .smart-fieldset{
@@ -822,8 +831,9 @@ function SmartDlgCreateTasks(){
             var issue_type = $(this).attr("data-issue-type");
             var task_name = $(this).val(); if (task_name.length == 0) task_name = "Имя задачи не задано";
             var task_estimate = $(`.${issue_type} .smart-task-estimate[data-smart-id="${index}"]`).val(); if (task_estimate.length == 0) task_estimate = 0; // $newTaskEstimateElemenst.find("#input_estm_subtask_backend*").length; //$(".edit-element[smart-index2='2']").length;   [data-smart-id="${index}"]
+            var task_assignee = $(`.${issue_type} .smart-task-assignee[data-smart-id="${index}"]`).val();
             //Smart_log(`${ln} index ${index} task_name ${task_name} task_estimate ${task_estimate}`);
-            tasks_data.push({"issue_type":issue_type, "task_name":task_name, "task_estimate":task_estimate, "params":{"project_type":"backlog"}});
+            tasks_data.push({"issue_type":issue_type, "task_name":task_name, "task_estimate":task_estimate, "task_assignee":task_assignee, "params":{"project_type":"backlog"}});
         });
     }
     // проверяем, не надо ли создать эпик в проекте разработки
@@ -966,6 +976,7 @@ function SmartDlgCreateTask(value){
             newIssueData.fields["parent"] = {"key": current_issue_data.key};
             newIssueData.fields["timetracking"] = {"originalEstimate": value.task_estimate};
             newIssueData.fields["description"] = "Планирование активности и ресурсов";
+            if (value.task_assignee.length > 0) newIssueData.fields["assignee"] = {"name": value.task_assignee};
             if ('components' in current_issue_data && current_issue_data.components != null) newIssueData.fields["components"] = current_issue_data.components;
             if ('customfield_11601' in current_issue_data && current_issue_data.customfield_11601 != null) newIssueData.fields["customfield_11601"] = current_issue_data.customfield_11601;
             if ('customfield_11610' in current_issue_data && current_issue_data.customfield_11610 != null) newIssueData.fields["customfield_11610"] = current_issue_data.customfield_11610;
@@ -1220,6 +1231,8 @@ function SmartDlgAddAnyTasks(classSubtask, classSubtaskDetail, count, taskName){
     $div.append( SmartDlgCreateTaskNameElement(id_postfix, class_name+" edit-element smart-task-name", `${taskName} (${count})`,count,classSubtaskDetail) );
     // добавляем в div строку ввода оценки задачи
     $div.append( SmartDlgCreateTaskEstimateElement(id_postfix, class_name+" edit-element smart-task-estimate", count,classSubtaskDetail) );
+    // добавляем в div строку ввода ответственного за задачу
+    $div.append( SmartDlgCreateTaskAssigneeElement(id_postfix, class_name+" edit-element smart-task-assignee", count,classSubtaskDetail) );
     // добавляем кнопку удаления группы элементов
     $div.append( SmartDlgCreateBtnDeleteElement(id_postfix, class_name) );
 }
@@ -1250,6 +1263,22 @@ function SmartDlgCreateTaskEstimateElement(postfix, className, index, issueType)
     })
     .css({
         'margin-right':'5px'
+    });
+  return $element;
+}
+function SmartDlgCreateTaskAssigneeElement(postfix, className, index, issueType) {
+    var $element = $('<input>').attr({
+        'id': 'input_assignee' + postfix,
+        'class': className+" text medium-field",
+        'type': 'text',
+        'placeholder': 'Ответственный',
+        "data-smart-id":index,
+        "data-issue-type":issueType
+    })
+    .css({
+        'margin-right':'5px'
+    })
+    .attr({'autocomplete': 'on'
     });
   return $element;
 }
