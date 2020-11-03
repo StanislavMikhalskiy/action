@@ -1287,18 +1287,69 @@ function CreateNewSystemTaskByTeamEpicTasks(value){
 * развернуть ветку реестра на отдельном прототипе\n
 * занести в реестр\n
 ** номер издания, название издания, хосты\n
-** коды публикации добавить в systemSite|preferences|publicationCodes\n
-** версию продукта добавить в actiondigitalservices|customer-service|accessMap|versionsVsPubs (добавить до версий продукта Актион360)\n
-* сформировать хосты с помощью консольной программы [https://gitlab.action-media.ru/ss/prokcreater/-/merge_requests/1] для всех 100 dev прототипов и настроить биндинги для всех 100 dev прототипов в C:WindowsSystem32inetsrvconfigapplicationHost.config.  Прописать биндинги для ТБД, ПБД SRV17\n
-* Закомитить в siteserver биндинги\n
-* Занести биндинги в [https://docs.google.com/spreadsheets/d/19pTgU58Q69-AWLjHsD2xHc5fUYQEg9KnHSQJ2stuWZQ/edit#gid=0] вызвать метод синхронизации в БД из реестра в customer-service (только для прок1 [http://customer-service/admin/apply-registry-to-meta])\n
+** коды публикации добавить в actiondigital|systemSite|preferences|publicationCodes\n
+** версию продукта добавить в actiondigital|services|customer-service|accessMap|versionsVsPubs (добавить до версий продукта Актион360)\n
+** добавить алиасы систем/изданий и флаги хоста в actiondigital|systemSite|meta|systAndPubsAndHostFlags\n
+* сформировать хосты с помощью консольной программы [https://gitlab.action-media.ru/ss/prokcreater/-/merge_requests/1] для всех 100 dev прототипов и настроить биндинги для всех 100 dev прототипов в C:/Windows/System32/inetsrv/config/applicationHost.config.  Прописать биндинги для ТБД, ПБД SRV17\n
+* Занести биндинги в [https://docs.google.com/spreadsheets/d/19pTgU58Q69-AWLjHsD2xHc5fUYQEg9KnHSQJ2stuWZQ/edit#gid=0]                                вызвать метод синхронизации в БД из реестра в customer-service (только для прок1 [http://customer-service/admin/apply-registry-to-meta])\n
 * Настроить прототип сайта СС (в appSettings.config <add key="cs.registry" value="http://registry2"/>), customer-service, customer-service-new на registry2\n
-* Добавить продукты в NBSERVICE_MP/dbo.LOT по аналогии с pub_id= 83\n
+* Добавить продукты в (srv15)sqld8.NBSERVICE_MP/dbo.LOT по аналогии с pub_id= 83\n
 ** ДД_[код издания], ДДП_[код издания], ДДПР_[код издания], ОЗ_[код издания], ПОД[код издания]`
                                 ,"estimate":6
             });
-            epicTeamTasks.push({ "summary":"Подключить заведенные ресурсы в метабазе SWMD",
-                                "description":`Для нового издания необходимо подключить заведенные ресурсы в метабазе SWMD`
+            epicTeamTasks.push({ "summary":"Подключить заведенные ресурсы в метабазе PG",
+                                "description":`Для нового издания необходимо подключить заведенные ресурсы в метабазе PG sps_content_backend_meta\n
+Данные добавлять через миграции в sps-content-service.\n
+Добавить соответствующие строки (скопировать с системы донора) в Meta/DbPub.cs, Meta/DbPubDiv.cs, Meta/DbPubDivRubricatorLnk.cs, Meta/DbPubModuleLnk.cs, Meta/DbPubPubDivLnk.cs \n
++ склонировать документы согласно требованиям\n
+\n
+{code:java}\n
+update "public".pub_group_lnk\n
+Set pub_ids = array_append(pub_ids,203)\n
+where pub_ids @> ARRAY[210];\n
+\n
+insert INTO "public".doc_lnk_exclude (pub_id, module_id, id, link_id)\n
+select 203 as pub_id\n
+, module_id, id, link_id\n
+from "public".doc_lnk_exclude p --limit 10\n
+where p.pub_id = 210\n
+and not exists (select * from "public".doc_lnk_exclude e where e.pub_id = p.pub_id and e.module_id=p.module_id and e.id=p.id and e.link_id=p.link_id );\n
+\n
+SELECT REPLACE(p.properties::text, ', 68,', ', 68, 200,') newprop,*\n
+-- drop table JBTEST\n
+into JBTEST\n
+from "public".document_toc p\n
+CROSS JOIN LATERAL json_to_recordset((p.properties::json -> 'TopicList')::json)\n
+AS list("Topic" TEXT, "TopicId" INT, "PubIds" INTEGER[])\n
+where p.properties is not NULL\n
+and 210=ANY(list."PubIds"::INTEGER[])\n
+\n
+UPDATE JBTEST p\n
+SET properties = p1.newprop::json\n
+From JBTEST p1\n
+where p.module_id = p1.module_id and p.id=p1.id --and p."TopicId"=p1."TopicId"\n
+\n
+UPDATE "public".document_toc d\n
+SET properties =jsonb_set(p1.properties, '{TopicList ,0, PubIds}', p1.newpubs)\n
+From JBTEST p1\n
+where d.module_id = p1.module_id and d.id=p1.id\n
+\n
+drop table JBTEST\n
+------------------\n
+insert INTO "public".sp_doc_statistics_data (pub_id, statistics_id, total_documents_count, new_documents_count, updated_on)\n
+select 70 as pub_id\n
+, statistics_id, total_documents_count, new_documents_count, now()\n
+from "public".sp_doc_statistics_data p\n
+where p.pub_id = 23;\n
+update "public".pub_group_lnk\n
+Set pub_ids = array_append(pub_ids,220)\n
+where pub_ids @> ARRAY[9];\n
+insert INTO "public".doc_lnk_exclude (pub_id, module_id, id, link_id)\n
+select 220 as pub_id\n
+, module_id, id, link_id\n
+from "public".doc_lnk_exclude p --limit 10\n
+where p.pub_id = 9\n
+{code}\n`
                                 ,"estimate":3
             });
             epicTeamTasks.push({ "summary":"Доработать публикатор контента",
