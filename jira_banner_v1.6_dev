@@ -1,3 +1,48 @@
+// ==UserScript==
+// @name         TestScript
+// @namespace    http://tampermonkey.net/
+// @version      1.6
+// @description  try to take over the world!
+// @author       You
+// @match        https://jira.action-media.ru/*
+// @grant GM_registerMenuCommand
+// @require https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js
+// ==/UserScript==
+
+GM_registerMenuCommand('Test', function () { Start(); });
+
+window.onload = function(){};
+
+/*
+https://jira.action-media.ru/secure/admin/EditAnnouncementBanner!default.jspa
+
+Smart_log(ln+JIRA.Issue.getIssueKey());
+Smart_log(ln+AJS.Meta.get("issue-key"));
+AJS.Meta.get("remote-user");
+JIRA.API.Projects.getCurrentProjectKey()
+AJS.banner({
+    body: 'Your <strong>license has expired!</strong> There are two days left to <a href="#">renew your license</a>.'
+});
+
+jQuery.fn.jquery
+
+JIRA.bind(JIRA.Events.ISSUE_REFRESHED, function() {
+    var key = AJS.$("#key-val").text();
+    console.log("Issue Key: " + key);
+});
+*/
+
+function Start(){
+    CreateNewSystemGetEpic();
+}
+
+
+// <script type='text/javascript' src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js">
+
+
+
+
+
 //<script type='text/javascript'>
 //(function ($) {
 // Автор: Михальский Станислав, 2019-2020
@@ -6,7 +51,7 @@ var script_version = '1.6'
 var devName = "_"
 
 var log_level = 0;
-var logPrefix = devName+"Custom script: ";
+var logPrefix = devName+"ABanner: ";
 
 // кнопки, которые добавлены через ScriptRunner и на которые вешаем обработчики
 var jiraButton = [{ "key":"addNewSystem", "value":"ss-new-system-js", "isEventAdded":false, "tryAddEventCount":0},
@@ -18,7 +63,8 @@ var vGlobal = {
     "jira": {"viewIssue":jiraURL+"/browse/",
              "getIssue":jiraURL+"/rest/api/2/issue/", 
              "postIssue":jiraURL+"/rest/api/2/issue/", // vGlobal.jira.postIssue
-             "postIssueLink":jiraURL+"/rest/api/2/issueLink/",
+             "postIssueBulk":jiraURL+"/rest/api/2/issue/bulk/", // vGlobal.jira.postIssueBulk
+             "postIssueLink":jiraURL+"/rest/api/2/issueLink/", // vGlobal.jira.postIssueLink
              "fields":{
                  "epicLink":"customfield_10100", // vGlobal.jira.fields.epicLink
                  "epicName":"customfield_10102", // vGlobal.jira.fields.epicName
@@ -39,10 +85,22 @@ var vGlobal = {
                  },
                  "issueTypes":{
                      "bcklg":{
-                         "iniciative":"10903" // vGlobal.jira.fields.issueTypes.bcklg.iniciative
+                         "iniciative":"10903", // vGlobal.jira.fields.issueTypes.bcklg.iniciative
+                         "backendSub":"11001", // vGlobal.jira.fields.issueTypes.bcklg.backendSub
+                         "frontendSub":"11002", // vGlobal.jira.fields.issueTypes.bcklg.frontendSub
+                         "testSub":"11005" // vGlobal.jira.fields.issueTypes.bcklg.testSub
                      },
                      "dev":{
-                         "epic":"10000"
+                         "epic":"10000",
+                         "task":"10214" // vGlobal.jira.fields.issueTypes.dev.task
+                     },
+                     "support":{
+                         "dev":"10902" // vGlobal.jira.fields.issueTypes.support.dev
+                     }
+                 },
+                 "issuePriorities":{
+                     "support":{
+                         "high":"2" // vGlobal.jira.fields.issuePriorities.support.high
                      }
                  }
              }
@@ -647,7 +705,7 @@ function uRequestPost(value) {
         .then(json)
         .then(function(data) {
         value.response["data"] = data;
-        Smart_log(ln+`value ${JSON.stringify(value)}`);
+        //Smart_log(ln+`value ${JSON.stringify(value)}`);
     })
         .then(resolve)
         .catch(() => resolve(null));
@@ -763,6 +821,271 @@ function CreateNewSystemParseEpic(obj){
         return false;
     } else return true
 }
+function uLinkIssue(issueFrom, issueTo, linkType, urlParams){
+    var ln = "uLinkIssue: ";
+    log_level++;
+    let urlLink = new URL(vGlobal.jira.postIssueLink);
+    if (urlParams.length > 0) {
+        for (let x of urlParams) {
+            urlLink.searchParams.set(x.key, x.value);
+        }
+    }
+    var issurLinkData = {
+            "type": {
+                "name": linkType
+            },
+            "inwardIssue": {
+                "key": issueFrom
+            },
+            "outwardIssue": {
+                "key": issueTo
+            }
+        };
+    fetch(urlLink, {
+        method: 'post',
+        headers: {
+            "Content-type": "application/json; charset=utf-8"
+        },
+        body: JSON.stringify(issurLinkData)
+    })
+        .then(resolve => {
+        if ( resolve.status != "201") { Smart_log(ln+`Ошибка при создании связи с инициативой status = ${resolve.status}`); }
+    })
+        .catch(function (error) { Smart_log(ln+`Ошибка при создании связи с инициативой ${error}`); });
+    log_level--;
+}
+function CreateNewSystemTaskBySupportEpic(value){
+    var ln = "CreateNewSystemTaskBySupportEpic: ";
+    log_level++;
+    Smart_log(ln+`Создаем эпик в проекте поддержки ${value.summary}`);
+
+    var newIssueData = {
+        "fields": {
+            "issuetype": {"id": vGlobal.jira.fields.issueTypes.dev.epic},
+            "summary": current_issue_data.summary,
+            "description": "Пул задач для новой системы/издания",
+            "project":{"key":"OAM"},
+            [vGlobal.jira.fields.epicName]:current_issue_data[vGlobal.jira.fields.epicName]
+        }
+    }
+
+    let url = new URL(vGlobal.jira.postIssue);
+    url.searchParams.set('AProcess', 'ABanner');
+    url.searchParams.set('ABProcess', 'CreateSys');
+    url.searchParams.set('ADetail', 'CreateIssue');
+    fetch(url, {
+        method: 'post',
+        headers: {
+            "Content-type": "application/json; charset=utf-8"
+        },
+        body: JSON.stringify(newIssueData)
+    })
+        .then(
+        function(response) {
+            if (response.status != "201") {
+                Smart_log(ln+`Ошибка при создании эпика поддержки status = ${response.status}`);
+                response.json().then(function(data) {
+                    Smart_log(ln+`error ${JSON.stringify(data)}`);
+                });
+                AJS.flag({
+                    type: 'error', // success, info, warning, error
+                    title: `Внимание!`,
+                    body: "Ошибка при создании эпика поддержки",
+                    close: "manual", //  "manual", "auto" and "never"
+                    persistent: false
+                });
+            } else {
+                response.json().then(function(data) {
+                    // {"id":"500252","key":"OAM-2230","self":"https://jira.action-media.ru/rest/api/2/issue/500252"}
+                    Smart_log(ln+`Эпик поддержки успешно создан - ${data.key}`);
+                    // создаем линк с эпиком в SS
+                    var urlParams = [{"key":"AProcess", "value":"ABanner"},
+                                     {"key":"ABProcess", "value":"CreateSys"},
+                                     {"key":"ADetail", "value":"CreateIssueLink"}]
+                    uLinkIssue(value.devEpic.response.data.key, data.key, "Relates",urlParams)
+                    //Smart_log(ln+`value ${JSON.stringify(data)}`);
+                    CreateNewSystemTaskBySupportEpicTasks(data.key);
+                })
+            }
+        }
+    )
+        .catch(function (error) { Smart_log(ln+`Ошибка при создании эпика поддержки ${error}`); });
+
+    log_level--;
+}
+function CreateNewSystemTaskBySupportEpicTasks(value){
+    var ln = "CreateNewSystemTaskBySupportEpicTasks: ";
+    log_level++;
+    Smart_log(ln+`Создаем задачи в эпике поддержки ${value}`);
+
+    var epicTeamTasks = [];
+    epicTeamTasks.push({ "summary":"Завести код счетчика GTM",
+                        "description":`Прошу предоставить код GTM для встраивания в новую систему/издание`
+                       });
+    epicTeamTasks.push({ "summary":"Настроить GA",
+                        "description":`Требуется для нового издания\
+                                    # Встроить код счетчиков GA в GTM
+                                    # Создать представления для Системы в GA\n
+                                    После ввода Системы в промышленную эксплуатацию:
+                                    # Провести тестирование Системы в рамках задачи
+                                    # Зарегистрировать найденные дефекты
+                                    # Выдать необходимые доступы к Системе
+                                    # Включить обработку системы на сервере статистики и для CRM`
+                       });
+    epicTeamTasks.push({ "summary":"Подключить горячую линию",
+                        "description":`Для новой системы/издания необходимо подключить сервис Горячей линии [Инструкция|http://conf.action-media.ru/x/eorvAQ]
+                                    # Подключить серверную часть ГЛ
+                                    # Настроить ссылку на документ с правилами ГЛ
+                                    # Настроить примеры ответов ГЛ
+                                    # Настроить ссылку на документ по готовым ответам от редакции\n
+                                    Данные, необходимые для подключения ГЛ, указаны в чек-листе [Чек-листы по подключаемому функционалу|https://conf.action-media.ru/pages/viewpage.action?pageId=91669138]`
+                       });
+    epicTeamTasks.push({ "summary":"Подключить онлайн-помощника",
+                        "description":`Для новой системы/издания необходимо подключить сервис ОП`
+                       });
+    epicTeamTasks.push({ "summary":"Подключить автописьма",
+                        "description":`Для новой Системы необходимо подключить отправку автописем через Сендсей
+                                    # Запросить у бизнеса данные по шаблонам писем (бизнес заводит шаблоны в Сендсей самостоятельно)
+                                    # Добавить шаблоны в почтовый сервис Платформы
+                                    # Добавить шаблоны в базу SS
+                                    # Прописать ID шаблонов в реестре, опубликовать реестр\n
+                                    Описание процесса подключения автописем и список необходимых шаблонов в [регламенте|https://conf.action-media.ru/pages/viewpage.action?pageId=126354103]`
+                       });
+    epicTeamTasks.push({ "summary":"Подключить возможность переноса избранного",
+                        "description":`Для новой Системы необходимо настроить перенос избранного
+                                    # В узле реестра (actiondigital|systemSite|fav|transfer) прописать идентификаторы изданий Системы через запятую к остальным идентификаторам изданий
+                                    # Провести тестирование Системы в рамках задачи`
+                       });
+    epicTeamTasks.push({ "summary":"Подключить мониторинг Аптайминспектор",
+                        "description":`Для новой Системы необходимо подключить мониторинг Аптайминспектор
+                                    # ОЭ (Леденева Е.)
+                                    ## Подключить сайты Системы к мониторингу Аптайминспектор
+                                    ## Обновить документацию (http://conf.action-media.ru/pages/viewpage.action?pageId=65378956)
+                                    ### Сервисы и сайты, подключенные к проверкам через АИ
+                                    ### Сотрудники, подключенные к смс-оповещениям от АИ
+                                    ### Шаблон письма для экстренного оповещения о проблемах`
+                       });
+    epicTeamTasks.push({ "summary":"Подключить адресатов для оценок редакционных материалов и поиска",
+                        "description":`Для новой Системы необходимо прописать e-mail-ы ответственных от редакции Системы по обработке оценок редакционных материалов и поиска
+                                    # Запросить у редакции адрес эл. почты для получения оценок редакционных материалов и поиска
+                                    # Настроить получателя в реестре:
+                                    ## Оценки ред. Материалов (actiondigital|serviceLetters|docsRating)
+                                    ## Оценки поиска (actiondigital|serviceLetters|searchEval)`
+                       });
+    epicTeamTasks.push({ "summary":"Подключить сервисные письма",
+                        "description":`# Настроить отправку сервисных писем с указанных адресов в реестре
+                                    ## В реестре есть узел Актион диджитал/Сервисные письма
+                                    ## В нем надо посмотреть все дочерние узлы и, там где есть перегрузка по изданиям, добавить перегрузку для системы
+                                    # Подключаются письма:
+                                    ## Подтверждение регистрации
+                                    ## Получение доступа (демо, оплаченный, ознакомительный, предемо, бонусный)
+                                    ## Изменение адреса эл.почты / Изменение телефона / Изменение пароля
+                                    ## Письмо коллеге с промостраницы`
+                       });
+    epicTeamTasks.push({ "summary":"Настроить HTTPS",
+                        "description":`# Для доменов новой Системы необходимо купить и установить SSL-сертификат [инструкция|http://conf.action-media.ru/x/NYrXAg]
+                                    # Сгенерировать файл CSR
+                                    # Настроить почту администратора домена
+                                    # Если сертификат отсутствует
+                                    ## Заказать сертификат [инструкция|http://conf.action-media.ru/x/NYrXAg]
+                                    ## Оплатить счет
+                                    ## Отправить заказ
+                                    ## Получить файл сертификата
+                                    ## Установить сертификат на площадке
+                                    ## Проверить установленный сертификат [инструкция|https://habrahabr.ru/company/hosting-cafe/blog/280442]
+                                    # прописать ssl-сертификаты в ИИС`
+                       });
+    epicTeamTasks.push({ "summary":"Добавить Пользовательское соглашение, Политику обработки данных, Положения",
+                        "description":`Необходимо добавить информацию о новой системе для отображения её на странице 3 в 1: Пользовательское соглашение, Политика обработки данных, Положение [инструкция|http://conf.action-media.ru/x/WI18Aw]
+                                    # Добавить правки по новой системе через реестр Актион диджитал/Сайт системы/Пользовательское соглашение:
+                                    ## Название
+                                    ## Информация`
+                       });
+    epicTeamTasks.push({ "summary":"Завести данные в БО ID2",
+                        "description":`Необходимо завести данные в БО ID2
+                                    Информация по AppID и урлам приложений находится в эпике разработки команды SS\n
+                                    # Если данные нужно прописать для новой системы:
+                                    ## Решить задачу в соответствии с руководством [Добавить домен к Приложению (прописать сайт в БО ID2)|https://conf.action-media.ru/pages/viewpage.action?pageId=65382812#id-%D0%A0%D1%83%D0%BA%D0%BE%D0%B2%D0%BE%D0%B4%D1%81%D1%82%D0%B2%D0%BE%D0%BF%D0%BE%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%BA%D0%B5%D0%98%D0%942%D0%B4%D0%BB%D1%8F%D0%92%D0%A1%D0%A1-%D0%94%D0%BE%D0%B1%D0%B0%D0%B2%D0%B8%D1%82%D1%8C%D0%B4%D0%BE%D0%BC%D0%B5%D0%BD%D0%BA%D0%9F%D1%80%D0%B8%D0%BB%D0%BE%D0%B6%D0%B5%D0%BD%D0%B8%D1%8E(%D0%BF%D1%80%D0%BE%D0%BF%D0%B8%D1%81%D0%B0%D1%82%D1%8C%D1%81%D0%B0%D0%B9%D1%82%D0%B2%D0%91%D0%9EID2)]
+                                    ## Appid и Secret Key прописывает в реестре, путь к основному узлу (actiondigital|systemSite|id2Info)
+                                    ## Проверить на прототипе
+                                    # Если данные нужно прописать для нового издания существующей системы:
+                                    ## Решить задачу в соответствии с [руководством|https://conf.action-media.ru/pages/viewpage.action?pageId=65382812#id-%D0%A0%D1%83%D0%BA%D0%BE%D0%B2%D0%BE%D0%B4%D1%81%D1%82%D0%B2%D0%BE%D0%BF%D0%BE%D0%BF%D0%BE%D0%B4%D0%B4%D0%B5%D1%80%D0%B6%D0%BA%D0%B5%D0%98%D0%942%D0%B4%D0%BB%D1%8F%D0%92%D0%A1%D0%A1-%D0%94%D0%BE%D0%B1%D0%B0%D0%B2%D0%B8%D1%82%D1%8C%D0%B4%D0%BE%D0%BC%D0%B5%D0%BD%D0%BA%D0%9F%D1%80%D0%B8%D0%BB%D0%BE%D0%B6%D0%B5%D0%BD%D0%B8%D1%8E(%D0%BF%D1%80%D0%BE%D0%BF%D0%B8%D1%81%D0%B0%D1%82%D1%8C%D1%81%D0%B0%D0%B9%D1%82%D0%B2%D0%91%D0%9EID2)]
+                                    # Прописать publication code в событиях для ID2 в реестре`
+                       });
+    epicTeamTasks.push({ "summary":"Реализовать стандартную клиентскую часть. Изменение реестра",
+                        "description":`Необходимо в реестре произвести настройку изданий\n
+                                    * [Перечень узлов для изменения|https://docs.google.com/spreadsheets/d/1sO4FJNMtkUt_ynPhs-yj8gCSBnNEkE8MjFxJxIHCWIs/edit?copiedFromTrash#gid=0]
+                                    ** В каких-то случаях нужно добавить копию узла, в каких-то случаях добавить перезагрузку.
+                                    * Настроить плашку доступа к другому изданию (добавить в реестр actiondigital|systemSite|authorization|anotherPubAccess|settings|pubs все издания системы через пробел, выставить соответствующую перегрузку)`
+                       });
+    epicTeamTasks.push({ "summary":"Реализовать стандартную клиентскую часть. Название системы для СМС",
+                        "description":`Необходимо добавить название системы для СМС в узел actiondigital|services|sms-service|sender|title`
+                       });
+    epicTeamTasks.push({ "summary":"Заведение виджетов ЛК. Проверка",
+                        "description":`Добавить продукту виджеты в БО ЛК в соответствии с инструкцией: https://conf.action-media.ru/pages/viewpage.action?pageId=208914315`
+                       });
+    var newIssuesData = {
+        "issueUpdates": []
+    }
+    // собираем итоговые данные для запроса
+    for (let x of epicTeamTasks) {
+        var newIssueData = {
+            "fields": {
+                "issuetype": {"id": vGlobal.jira.fields.issueTypes.support.dev},
+                "summary": x.summary,
+                "description": x.description,
+                [vGlobal.jira.fields.epicLink]: value,
+                "project":{"key":"OAM"},
+                "priority": {"id":vGlobal.jira.fields.issuePriorities.support.high}
+            }
+        }
+        newIssuesData.issueUpdates.push(newIssueData);
+    }
+
+    let url = new URL(vGlobal.jira.postIssueBulk);
+    url.searchParams.set('AProcess', 'ABanner');
+    url.searchParams.set('ABProcess', 'CreateSys');
+    url.searchParams.set('ADetail', 'CreateIssue');
+    fetch(url, {
+        method: 'post',
+        headers: {
+            "Content-type": "application/json; charset=utf-8"
+        },
+        body: JSON.stringify(newIssuesData)
+    })
+        .then(
+        function(response) {
+            if (response.status != "201") {
+                Smart_log(ln+`Ошибка при создании задач в эпике поддержки status = ${response.status}`);
+                response.json().then(function(data) {
+                    Smart_log(ln+`error ${JSON.stringify(data)}`);
+                });
+                AJS.flag({
+                    type: 'error', // success, info, warning, error
+                    title: `Внимание!`,
+                    body: "Ошибка при создании задач в эпике поддержки",
+                    close: "manual", //  "manual", "auto" and "never"
+                    persistent: false
+                });
+            } else {
+                response.json().then(function(data) {
+                    Smart_log(ln+`Задачи в эпике поддержки успешно созданы`);
+                    AJS.flag({
+                        type: 'success', // success, info, warning, error
+                        title: `Эпик ${value}`,
+                        body: "Задачи в эпике поддержки успешно созданы",
+                        close: "manual", //  "manual", "auto" and "never"
+                        persistent: false
+                    });
+                    //Smart_log(ln+`value ${JSON.stringify(data)}`);
+                })
+            }
+        }
+    )
+        .catch(function (error) { Smart_log(ln+`Ошибка при создании задач в эпике поддержки ${error}`); });
+
+    log_level--;
+}
 function CreateNewSystemTaskByTeamEpic(value){
     var ln = "CreateNewSystemTaskByTeamEpic: ";
     log_level++;
@@ -802,17 +1125,310 @@ function CreateNewSystemTaskByTeamEpic(value){
     requests.push(uRequestPost(value.devEpic));
 
     Promise.all(requests).then((values) => {
-        //Smart_log(ln+`response ALL`);
-        // для каждой инициативы мы создаем задачи по командам
-        Smart_log(ln+`value.devEpic ${JSON.stringify(value.devEpic)}`);
+        //Smart_log(ln+`value.devEpic ${JSON.stringify(value.devEpic)}`);
+        if (value.devEpic.response.stateCode == "201"){
+            // создаем линк с инициативой
+            var urlParams = [{"key":"AProcess", "value":"ABanner"},
+                             {"key":"ABProcess", "value":"CreateSys"},
+                             {"key":"ADetail", "value":"CreateIssueLink"}]
+            uLinkIssue(value.response.data.key, value.devEpic.response.data.key, "Developes",urlParams)
+
+            // создаем задачи в команды
+            CreateNewSystemTaskByTeamEpicTasks(value)
+
+            // если эпик в проекте SS успешно создался, то
+            if (value.devEpic.request.data.fields.project.key == "SS"){
+                // создаем эпик в проекте поддержки и задачи в нем
+                CreateNewSystemTaskBySupportEpic(value);
+                // создаем ресурсные задачи в портфеле проектов
+                CreateNewSystemIniciatuveSubTask(value);
+            }
+        } else {
+            Smart_log(ln+`Ошибка при создании эпика разработки status = ${value.devEpic.response.stateCode}`);
+            AJS.flag({
+                type: 'error', // success, info, warning, error
+                title: `Эпик в проекте ${value.devEpic.request.data.fields.project}`,
+                body: "Ошибка при создании эпика разработки",
+                close: "manual", //  "manual", "auto" and "never"
+                persistent: false
+            });
+        }
         });
+
+    log_level--;
+}
+function CreateNewSystemIniciatuveSubTask(value){
+    var ln = "CreateNewSystemIniciatuveSubTask: ";
+    log_level++;
+    Smart_log(ln+`Создаем подзадачи в инициативе SS`);
+
+    var epicTasks = [];
+    epicTasks.push({
+        "fields": {
+            "issuetype": {"id": vGlobal.jira.fields.issueTypes.bcklg.backendSub},
+            "summary":"[B] Разработка 1/2",
+            "timetracking": {"originalEstimate":"12"}}
+    });
+    epicTasks.push({
+        "fields": {
+            "issuetype": {"id": vGlobal.jira.fields.issueTypes.bcklg.backendSub},
+            "summary":"[B] Разработка 2/2",
+            "timetracking": {"originalEstimate":"8"}}
+    });
+    epicTasks.push({
+        "fields": {
+            "issuetype": {"id": vGlobal.jira.fields.issueTypes.bcklg.backendSub},
+            "summary":"[B] Публикация",
+            "timetracking": {"originalEstimate":"4"}}
+    });
+    epicTasks.push({
+        "fields": {
+            "issuetype": {"id": vGlobal.jira.fields.issueTypes.bcklg.frontendSub},
+            "summary":"[F] Разработка",
+            "timetracking": {"originalEstimate":"12"}}
+    });
+    epicTasks.push({
+        "fields": {
+            "issuetype": {"id": vGlobal.jira.fields.issueTypes.bcklg.frontendSub},
+            "summary":"[F] Публикация",
+            "timetracking": {"originalEstimate":"2"}}
+    });
+    epicTasks.push({
+        "fields": {
+            "issuetype": {"id": vGlobal.jira.fields.issueTypes.bcklg.testSub},
+            "summary":"[T] Тестирование",
+            "timetracking": {"originalEstimate":"6"}}
+    });
+
+    var newIssuesData = {
+        "issueUpdates": []
+    }
+    // собираем итоговые данные для запроса
+    for (let x of epicTasks) {
+        x.fields["project"] = {"key":"BCKLG"}
+        x.fields["description"] = "Учет времени"
+        x.fields["parent"] = {"key":value.response.data.key},
+        x.fields["components"] = [{"id": vGlobal.jira.fields.components.SS}]
+        x.fields[vGlobal.jira.fields.team]= {"id":vGlobal.jira.fields.teams.SS}
+        x.fields[vGlobal.jira.fields.businessCase] = {"id":vGlobal.jira.fields.businessCases.bigPicture}
+        newIssuesData.issueUpdates.push(x);
+    }
+
+    let url = new URL(vGlobal.jira.postIssueBulk);
+    url.searchParams.set('AProcess', 'ABanner');
+    url.searchParams.set('ABProcess', 'CreateSys');
+    url.searchParams.set('ADetail', 'CreateIssue');
+    fetch(url, {
+        method: 'post',
+        headers: {
+            "Content-type": "application/json; charset=utf-8"
+        },
+        body: JSON.stringify(newIssuesData)
+    })
+        .then(
+        function(response) {
+            if (response.status != "201") {
+                Smart_log(ln+`Ошибка при создании подзадач в инициативе SS status = ${response.status}`);
+                response.json().then(function(data) {
+                    Smart_log(ln+`error ${JSON.stringify(data)}`);
+                });
+                AJS.flag({
+                    type: 'error', // success, info, warning, error
+                    title: `Внимание!`,
+                    body: "Ошибка при создании подзадач в инициативе SS",
+                    close: "manual", //  "manual", "auto" and "never"
+                    persistent: false
+                });
+            } else {
+                response.json().then(function(data) {
+                    Smart_log(ln+`Подзадачи в инициативе SS успешно созданы`);
+                    //Smart_log(ln+`value ${JSON.stringify(data)}`);
+                })
+            }
+        }
+    )
+        .catch(function (error) { Smart_log(ln+`Ошибка при создании подзадач в инициативе SS ${error}`); });
 
     log_level--;
 }
 function CreateNewSystemTaskByTeamEpicTasks(value){
     var ln = "CreateNewSystemTaskByTeamEpicTasks: ";
     log_level++;
-    Smart_log(ln+`Создаем задачи в эпике разработки ...`);
+    Smart_log(ln+`Создаем задачи в эпике разработки ${value.summary} - ${value.devEpic.response.data.key}`);
+
+    // создаем задачи в команды
+    //const requests = [];
+    var epicTeamTasks = [];
+    switch(value.team) {
+        case "11830": { // SS
+            epicTeamTasks.push({ "summary":"Завести издания для рассылок",
+                                "description":`# Завести издания для рассылок (Подключить механизм подписки/отписки в БО и на сайтах СС)\n
+# Прописать издания для отписок\n
+# Обеспечить корректное формирование файла для Сендсей и отправку корректных подписок`
+                                ,"estimate":2
+            });
+            epicTeamTasks.push({ "summary":"Подключить оценочную нападалку",
+                                "description":`Подключить оценочную нападалку`
+                                ,"estimate":3
+            });
+            epicTeamTasks.push({ "summary":"Сделать страницу о системе",
+                                "description":`Для новой системы/издания необходимо создать промо-страницу для подключения iFrame\n
+# Обязательные пути реестра (https://docs.google.com/spreadsheets/d/1sO4FJNMtkUt_ynPhs-yj8gCSBnNEkE8MjFxJxIHCWIs/edit?copiedFromTrash#gid=0)`
+            });
+             epicTeamTasks.push({ "summary":"Добавить клиентские изменения:  js, xsl и реестр",
+                                 "description":`Необходимо:\n
+# Проверить\\дополнить реестр (если будет нужно) после того, как поддержка его заполнит\n
+# Внести общие правки в клиентский код: добавить настройки, добавить промо, правки xsl\\js \n
+# Не забыть подключить счетчик (задача в эпике поддержки)`
+                                 ,"estimate":8
+            });
+            epicTeamTasks.push({ "summary":"Наполнить метаданными реестр, конфиг, БД, ДНС",
+                                "description":`Необходимо:\n
+* развернуть ветку реестра на отдельном прототипе\n
+* занести в реестр\n
+** номер издания, название издания, хосты\n
+** коды публикации добавить в systemSite|preferences|publicationCodes\n
+** версию продукта добавить в actiondigitalservices|customer-service|accessMap|versionsVsPubs (добавить до версий продукта Актион360)\n
+* сформировать хосты с помощью консольной программы [https://gitlab.action-media.ru/ss/prokcreater/-/merge_requests/1] для всех 100 dev прототипов и настроить биндинги для всех 100 dev прототипов в C:WindowsSystem32inetsrvconfigapplicationHost.config.  Прописать биндинги для ТБД, ПБД SRV17\n
+* Закомитить в siteserver биндинги\n
+* Занести биндинги в [https://docs.google.com/spreadsheets/d/19pTgU58Q69-AWLjHsD2xHc5fUYQEg9KnHSQJ2stuWZQ/edit#gid=0] вызвать метод синхронизации в БД из реестра в customer-service (только для прок1 [http://customer-service/admin/apply-registry-to-meta])\n
+* Настроить прототип сайта СС (в appSettings.config <add key="cs.registry" value="http://registry2"/>), customer-service, customer-service-new на registry2\n
+* Добавить продукты в NBSERVICE_MP/dbo.LOT по аналогии с pub_id= 83\n
+** ДД_[код издания], ДДП_[код издания], ДДПР_[код издания], ОЗ_[код издания], ПОД[код издания]`
+                                ,"estimate":6
+            });
+            epicTeamTasks.push({ "summary":"Подключить заведенные ресурсы в метабазе SWMD",
+                                "description":`Для нового издания необходимо подключить заведенные ресурсы в метабазе SWMD`
+                                ,"estimate":3
+            });
+            epicTeamTasks.push({ "summary":"Доработать публикатор контента",
+                                "description":`Для нового издания необходимо доработать публикатор контента`
+                                ,"estimate":1
+            });
+            epicTeamTasks.push({ "summary":"Доработать публикатор поискового индекса",
+                                "description":`Для нового издания необходимо доработать публикатор поискового индекса`
+                                ,"estimate":1
+            });
+            epicTeamTasks.push({ "summary":"Прописать названия разделов в реестре",
+                                "description":`Для нового издания необходимо прописать названия разделов в реестре`
+                                ,"estimate":1
+            });
+            epicTeamTasks.push({ "summary":"Оценить эпик. Фронт",
+                "description":`Произвести декомпозицию и оценку эпика с учетом уже заведенных задач\n
+                                Распределить задачи по разработчикам`
+            });
+            epicTeamTasks.push({ "summary":"Оценить эпик. Бэк",
+                "description":`Произвести декомпозицию и оценку эпика с учетом уже заведенных задач\n
+                                Распределить задачи по разработчикам`
+            });
+            epicTeamTasks.push({ "summary":"Слияние и публикация. Бэк",
+                                "description":`Слияние и публикация`
+                                ,"estimate":4
+            });
+            epicTeamTasks.push({ "summary":"Слияние и публикация. Фронт",
+                                "description":`Слияние и публикация`
+                                ,"estimate":2
+            });
+            epicTeamTasks.push({ "summary":"Закрыть издание заглушкой",
+                "description":`Перенести систему в ssgag`
+            });
+            epicTeamTasks.push({ "summary":"Снять заглушку у системы",
+                "description":`Перенести систему из ssgag`
+            });
+            epicTeamTasks.push({ "summary":"Завести боевые url и биндинги",
+                "description":`Завести боевые url и биндинги для нового издания`
+            });
+            epicTeamTasks.push({ "summary":"Настроить отчеты в программе статистики (ПС)",
+                "description":`Проверить, что данные пишутся в программу статистики. Настроить и проверить основные отчёты (Ковалева Т.)`
+            });
+            break; }
+        case "11855": { // SEARCH точно нужна задача на включение поиска, и две задачи на индексацию - экспертных, и нпд
+            epicTeamTasks.push({ "summary":"Подключить поиск",
+                "description":`Для нового издания необходимо подключить поиск по документам и в судебной практике\n
+                                # Подключить на сайте поиск по документам\n
+                                # Завести в БД поисковые теги, подсказки, эталоны\n\n
+                                Если запускаем несколько систем/изданий одновременно, то для них подключение поиска на каждую по задаче, а индексацию делаем одну ЭМ и одну НПД `
+            });
+            epicTeamTasks.push({ "summary":"Индексация экспертных материалов",
+                "description":`Необходимо провести индексацию ЭМ`
+            });
+            epicTeamTasks.push({ "summary":"Индексация НПД",
+                "description":`Необходимо провести индексацию НПД`
+            });
+            break; }
+        case "11856": { // WARM
+            epicTeamTasks.push({ "summary":"Завести метаданные для новой системы/издания",
+                "description":`Завести метаданные для новой системы/издания`
+            });
+            epicTeamTasks.push({ "summary":"Настроить стартовые для новой системы/издания",
+                "description":`Настроить стартовые страницы для новой системы/издания`
+            });
+            epicTeamTasks.push({ "summary":"Настроить контент для новой системы/издания",
+                "description":`Настроить контент для новой системы/издания`
+            });
+            break; }
+    }
+
+    var newIssuesData = {
+        "issueUpdates": []
+    }
+    // собираем итоговые данные для запроса
+    for (let x of epicTeamTasks) {
+        var newIssueData = {
+            "fields": {
+                "issuetype": {"id": vGlobal.jira.fields.issueTypes.dev.task},
+                "summary": x.summary,
+                "description": x.description,
+                [vGlobal.jira.fields.epicLink]: value.devEpic.response.data.key
+            }
+        }
+        switch(value.team) {
+            case "11830": { // SS
+                newIssueData.fields["project"] = {"key":"SS"}
+                break; }
+            case "11855": { // SEARCH
+                newIssueData.fields["project"] = {"key":"SRCH"}
+                break; }
+            case "11856": { // WARM
+                newIssueData.fields["project"] = {"key":"WARM"}
+                break; }
+        }
+        newIssuesData.issueUpdates.push(newIssueData);
+    }
+
+    let url = new URL(vGlobal.jira.postIssueBulk);
+    url.searchParams.set('AProcess', 'ABanner');
+    url.searchParams.set('ABProcess', 'CreateSys');
+    url.searchParams.set('ADetail', 'CreateIssuesBulk');
+    fetch(url, {
+        method: 'post',
+        headers: {
+            "Content-type": "application/json; charset=utf-8"
+        },
+        body: JSON.stringify(newIssuesData)
+    })
+        .then(resolve => {
+        if ( resolve.status != "201") {
+            Smart_log(ln+`Ошибка при создании задач в эпике разработки status = ${resolve.status}, ${value.devEpic.response.data.key}`);
+            AJS.flag({
+                type: 'error', // success, info, warning, error
+                title: `Эпик ${value.devEpic.response.data.key}`,
+                body: "Ошибка при создании задач в эпике разработки",
+                close: "manual", //  "manual", "auto" and "never"
+                persistent: false
+            });
+        } else {
+            Smart_log(ln+`Задачи в эпике ${value.devEpic.response.data.key} успешно созданы`);
+            AJS.flag({
+                type: 'success', // success, info, warning, error
+                title: `Эпик ${value.devEpic.response.data.key}`,
+                body: "Задачи упешно созданы",
+                close: "manual", //  "manual", "auto" and "never"
+                persistent: false
+            });
+        }
+    })
+        .catch(function (error) { Smart_log(ln+`Ошибка при создании задач в эпике разработки ${error}`); });
 
     log_level--;
 }
@@ -820,8 +1436,6 @@ function CreateNewSystemCreateTasks(){
     var ln = "CreateNewSystemCreateTasks: ";
     log_level++;
 
-    // готовим массив для ajax вызовов
-    //var deferreds = [];
     const requests = [];
     // подготовка массива данных для создания задач
     // создание инициатив
@@ -954,7 +1568,7 @@ function CreateNewSystemCreateTasks(){
                      });
                 }
             });*/
-        Smart_log(ln+`response ALL`);
+        //Smart_log(ln+`response ALL`);
         // для каждой инициативы мы создаем задачи по командам
         for (let x of newSysTasksDataIniciative) {
             if (x.response.stateCode == "201") CreateNewSystemTaskByTeamEpic(x);
@@ -994,15 +1608,6 @@ function CreateNewSystemCreateTasks(){
         });
 */
     //newSysTasksData["SS"]
-    /*
-    
-    перейти на последовательное создание задач, но пачками
-    
-    - эпик бэклога
-
-    Для поиска
-    точно нужна задача на включение поиска, и две задачи на индексацию - экспертных, и нпд
-    */
     log_level--;
 }
 
@@ -1559,7 +2164,7 @@ function UCreateIssueLink(value){
     var ln = "UCreateIssueLink: ";
     log_level++;
 
-    let url = new URL(jiraAPIPostIssueLink);
+    let url = new URL(vGlobal.jira.postIssueLink);
     // добавляем параметры запроса, в том числе для идентификации в елке
     if (value.searchParams.length > 0) {
         for (let x of value.searchParams) {
@@ -2423,3 +3028,17 @@ AJS.$(document).ajaxComplete(FajaxComplete);
 
 //})(AJS.$);
 //</script>
+
+
+//Start();
+
+/*
+
+var foo = {
+  a: 5,
+  b: 6,
+  get c() {
+    return this.a + this.b;
+  }
+}
+*/
