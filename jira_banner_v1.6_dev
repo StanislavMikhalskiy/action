@@ -1290,6 +1290,9 @@ function CreateNewSystemTaskByTeamEpicTasks(value){
 ** коды публикации добавить в actiondigital|systemSite|preferences|publicationCodes\n
 ** версию продукта добавить в actiondigital|services|customer-service|accessMap|versionsVsPubs (добавить до версий продукта Актион360)\n
 ** добавить алиасы систем/изданий и флаги хоста в actiondigital|systemSite|meta|systAndPubsAndHostFlags\n
+** в реестре в разделе Схема аутентификации добавить перегрузку системы на значение ad\n
+** вызвать метод http://customer-service/admin/apply-registry-to-meta\n
+** проверить в БД customer/accessmap/versionVsPub что появилось значение\n
 * сформировать хосты с помощью консольной программы [https://gitlab.action-media.ru/ss/prokcreater/-/merge_requests/1] для всех 100 dev прототипов и настроить биндинги для всех 100 dev прототипов в C:/Windows/System32/inetsrv/config/applicationHost.config.  Прописать биндинги для ТБД, ПБД SRV17\n
 * Занести биндинги в [https://docs.google.com/spreadsheets/d/19pTgU58Q69-AWLjHsD2xHc5fUYQEg9KnHSQJ2stuWZQ/edit#gid=0]                                вызвать метод синхронизации в БД из реестра в customer-service (только для прок1 [http://customer-service/admin/apply-registry-to-meta])\n
 * Настроить прототип сайта СС (в appSettings.config <add key="cs.registry" value="http://registry2"/>), customer-service, customer-service-new на registry2\n
