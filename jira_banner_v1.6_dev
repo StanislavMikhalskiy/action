@@ -933,7 +933,7 @@ function CreateNewSystemTaskBySupportEpicTasks(value){
                                     # Включить обработку системы на сервере статистики и для CRM`
                        });
     epicTeamTasks.push({ "summary":"Подключить горячую линию",
-                        "description":`Для новой системы/издания необходимо подключить сервис Горячей линии [Инструкция|http://conf.action-media.ru/x/eorvAQ]
+                        "description":`Для новой системы/издания необходимо подключить сервис Горячей линии [Инструкция|https://conf.action-media.ru/x/GBc_CQ]
                                     # Подключить серверную часть ГЛ
                                     # Настроить ссылку на документ с правилами ГЛ
                                     # Настроить примеры ответов ГЛ
@@ -1293,6 +1293,8 @@ function CreateNewSystemTaskByTeamEpicTasks(value){
 ** в реестре в разделе Схема аутентификации добавить перегрузку системы на значение ad\n
 ** вызвать метод http://customer-service/admin/apply-registry-to-meta\n
 ** проверить в БД customer/accessmap/versionVsPub что появилось значение\n
+** настройка customercontent-serviceM на соответствующий registryN\n
+** настройка SiteSS на customercontent-serviceM и customercontent-serviceM на соответствующий registryN\n
 * сформировать хосты с помощью консольной программы [https://gitlab.action-media.ru/ss/prokcreater/-/merge_requests/1] для всех 100 dev прототипов и настроить биндинги для всех 100 dev прототипов в C:/Windows/System32/inetsrv/config/applicationHost.config.  Прописать биндинги для ТБД, ПБД SRV17\n
 * Занести биндинги в [https://docs.google.com/spreadsheets/d/19pTgU58Q69-AWLjHsD2xHc5fUYQEg9KnHSQJ2stuWZQ/edit#gid=0]                                вызвать метод синхронизации в БД из реестра в customer-service (только для прок1 [http://customer-service/admin/apply-registry-to-meta])\n
 * Настроить прототип сайта СС (в appSettings.config <add key="cs.registry" value="http://registry2"/>), customer-service, customer-service-new на registry2\n
