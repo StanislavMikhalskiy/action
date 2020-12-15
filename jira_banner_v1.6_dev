@@ -1021,6 +1021,9 @@ function CreateNewSystemTaskBySupportEpicTasks(value){
     epicTeamTasks.push({ "summary":"Реализовать стандартную клиентскую часть. Название системы для СМС",
                         "description":`Необходимо добавить название системы для СМС в узел actiondigital|services|sms-service|sender|title`
                        });
+epicTeamTasks.push({ "summary":"Универсальный сервис ссылок. Добавить новые продукты",
+                        "description":`Необходимо добавить новые продукты в соответствии с [регламентом|https://conf.action-media.ru/pages/viewpage.action?pageId=259693465#id-Универсальныйсервисссылок-Регламентдобавленияновыхпродуктов]`
+                       });
     epicTeamTasks.push({ "summary":"Заведение виджетов ЛК. Проверка",
                         "description":`Добавить продукту виджеты в БО ЛК в соответствии с инструкцией: https://conf.action-media.ru/pages/viewpage.action?pageId=208914315`
                        });
@@ -1268,7 +1271,11 @@ function CreateNewSystemTaskByTeamEpicTasks(value){
                                 ,"estimate":2
             });
             epicTeamTasks.push({ "summary":"Подключить оценочную нападалку",
-                                "description":`Подключить оценочную нападалку`
+                                "description":`Подключить оценочную нападалку\n
+1) добавить в forsiteservice\Xml\Survey\GetSurvey\NN.xml например 42.xml\n
+2) добавить номера новых нападалок для новых Систем sitess\App_Code\SiteCore\BLL\Requests\Site\Survey\CreateResponse.cs\n
+список Id оценочных нападалок npsList = new[] { 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37 };\n
+3) в \sitess\xml\bll\site\letter\common.xml прописать новые системы`
                                 ,"estimate":3
             });
             epicTeamTasks.push({ "summary":"Сделать страницу о системе",
